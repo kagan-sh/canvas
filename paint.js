@@ -1,36 +1,10 @@
 // @ts-check
 
+import { PathBuilder, div } from "gpui-kit";
 import { arrowLabelAt, arrowRoute, textBounds, textLines, visibleBoxLines, BOX_PAD, LABEL_FONT, ARROW_FONT } from "./layout.js";
 import { arrowPoints } from "./model.js";
 
-/** Sketch has six inks. The canvas keeps the eight names agents already use. */
-const INK = {
-  default: "ink",
-  red: "failed",
-  green: "working",
-  yellow: "needs",
-  blue: "accent",
-  magenta: "failed",
-  cyan: "working",
-  gray: "muted",
-};
-
 const LIMIT = 1_000_000;
-
-/** @param {string | undefined} color */
-function ink(color) {
-  return INK[color && color in INK ? color : "default"];
-}
-
-/** @param {string} id */
-function seedFor(id) {
-  let hash = 2166136261;
-  for (let i = 0; i < id.length; i++) {
-    hash ^= id.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
-  }
-  return hash >>> 0;
-}
 
 /** @param {number} value */
 function finite(value) {
@@ -43,111 +17,278 @@ function legalRect(x, y, w, h) {
 }
 
 /**
- * @param {import("gpui-component").SketchScene} scene
+ * @param {number} wx
+ * @param {number} wy
+ * @param {{ x: number, y: number, scale: number }} view
+ */
+function screen(wx, wy, view) {
+  return [(wx - view.x) * view.scale, (wy - view.y) * view.scale];
+}
+
+/**
+ * @param {string} hex
+ * @param {import("gpui-kit").Path} path
+ */
+function paint(path, hex) {
+  return window.paint_path(path, /** @type {import("gpui-kit").Color} */ (hex));
+}
+
+/**
+ * @param {[number, number][]} points screen points
+ * @param {number} width
+ * @param {string} hex
+ * @param {boolean} [closed]
+ */
+function strokePoly(points, width, hex, closed = false) {
+  if (points.length < 2) return null;
+  const builder = PathBuilder.stroke(Math.max(1, width));
+  builder.move_to(points[0][0], points[0][1]);
+  for (let i = 1; i < points.length; i++) builder.line_to(points[i][0], points[i][1]);
+  if (closed) builder.close();
+  try {
+    return paint(builder.build(), hex);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * @param {[number, number][]} points screen points
+ * @param {string} hex
+ */
+function fillPoly(points, hex) {
+  if (points.length < 3) return null;
+  const builder = PathBuilder.fill();
+  builder.add_polygon(points, true);
+  try {
+    return paint(builder.build(), hex);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * @param {number} x1
+ * @param {number} y1
+ * @param {number} x2
+ * @param {number} y2
+ * @param {number} size
+ * @param {string} hex
+ */
+function arrowHead(x1, y1, x2, y2, size, hex) {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const len = Math.hypot(dx, dy) || 1;
+  const ux = dx / len;
+  const uy = dy / len;
+  const px = -uy;
+  const py = ux;
+  return fillPoly(
+    [
+      [x2, y2],
+      [x2 - ux * size + px * size * 0.45, y2 - uy * size + py * size * 0.45],
+      [x2 - ux * size - px * size * 0.45, y2 - uy * size - py * size * 0.45],
+    ],
+    hex,
+  );
+}
+
+/**
+ * @param {number} x
+ * @param {number} y
+ * @param {number} w
+ * @param {number} h
+ * @param {number} width
+ * @param {string} hex
+ */
+function strokeRect(x, y, w, h, width, hex) {
+  return strokePoly(
+    [
+      [x, y],
+      [x + w, y],
+      [x + w, y + h],
+      [x, y + h],
+    ],
+    width,
+    hex,
+    true,
+  );
+}
+
+/**
+ * @param {number} x
+ * @param {number} y
+ * @param {number} w
+ * @param {number} h
+ * @param {string} hex
+ */
+function fillRect(x, y, w, h, hex) {
+  return fillPoly(
+    [
+      [x, y],
+      [x + w, y],
+      [x + w, y + h],
+      [x, y + h],
+    ],
+    hex,
+  );
+}
+
+/**
+ * Build drawable children for the canvas surface (no Sketch — shipping kagan dropped it).
+ *
  * @param {import("./model.js").ElementRecord[]} elements
  * @param {{ x: number, y: number, scale: number }} view
  * @param {string[]} selected
  * @param {import("./model.js").ElementRecord | null} draft
- * @param {Set<string>} painted
+ * @param {Record<string, string>} swatch hex colors keyed by canvas color name
+ * @param {string} accentHex
  */
-export function syncScene(scene, elements, view, selected, draft, painted) {
-  scene.view(view.x, view.y, view.scale);
-  /** @type {Set<string>} */
-  const next = new Set();
+export function renderScene(elements, view, selected, draft, swatch, accentHex) {
+  /** @type {import("gpui-kit").Element[]} */
+  const children = [];
   /** @type {Map<string, { x: number, y: number, w: number, h: number }>} */
   const boxes = new Map();
   for (const element of elements) {
     if (element.type === "box" && element.id) boxes.set(element.id, element);
   }
-  for (const element of elements) paintElement(scene, element, elements, boxes, false, next);
-  if (draft) paintElement(scene, draft, elements, boxes, true, next);
+
+  /** @param {import("./model.js").ElementRecord} element */
+  const push = (element) => {
+    const hex = swatch[element.color && element.color in swatch ? element.color : "default"] ?? swatch.default;
+    if (element.type === "box") {
+      if (!legalRect(element.x, element.y, element.w, element.h)) return;
+      const [x, y] = screen(element.x, element.y, view);
+      const w = element.w * view.scale;
+      const h = element.h * view.scale;
+      const stroke = strokeRect(x, y, w, h, 2, hex);
+      if (stroke) children.push(stroke);
+      if (element.label) {
+        const lines = visibleBoxLines(element.label, element.w, element.h).filter((line) => !line.includes("\n"));
+        if (lines.length > 0) {
+          children.push(
+            div()
+              .absolute()
+              .left(x)
+              .top(y + BOX_PAD * view.scale)
+              .w(w)
+              .text_center()
+              .text_size(LABEL_FONT * view.scale)
+              .text_color(hex)
+              .child(lines.join("\n")),
+          );
+        }
+      }
+      return;
+    }
+    if (element.type === "arrow") {
+      const world = element.from || element.to
+        ? arrowRoute(element, boxes).map((point) => /** @type {[number, number]} */ ([point.x, point.y]))
+        : arrowPoints(element, elements).map((point) => /** @type {[number, number]} */ ([point.x, point.y]));
+      if (world.length < 2 || world.some((point) => !finite(point[0]) || !finite(point[1]))) return;
+      const points = world.map(([wx, wy]) => screen(wx, wy, view));
+      const line = strokePoly(points, 2, hex);
+      if (line) children.push(line);
+      const heads = element.heads === "none" || element.heads === "start" || element.heads === "both" ? element.heads : "end";
+      const head = 10;
+      if (heads === "end" || heads === "both") {
+        const a = points[points.length - 2];
+        const b = points[points.length - 1];
+        const tip = arrowHead(a[0], a[1], b[0], b[1], head, hex);
+        if (tip) children.push(tip);
+      }
+      if (heads === "start" || heads === "both") {
+        const a = points[1];
+        const b = points[0];
+        const tip = arrowHead(a[0], a[1], b[0], b[1], head, hex);
+        if (tip) children.push(tip);
+      }
+      if (element.label) {
+        const at = arrowLabelAt(element.label, world.map(([x, y]) => ({ x, y })));
+        if (at && finite(at.x) && finite(at.y)) {
+          const [sx, sy] = screen(at.x, at.y, view);
+          children.push(
+            div()
+              .absolute()
+              .left(sx - 80)
+              .top(sy - ARROW_FONT * view.scale)
+              .w(160)
+              .text_center()
+              .text_size(ARROW_FONT * view.scale)
+              .text_color(hex)
+              .child(element.label.replace(/[\r\n]/g, " ")),
+          );
+        }
+      }
+      return;
+    }
+    if (element.type === "text") {
+      const bounds = textBounds(element.x, element.y, element.text);
+      const lines = textLines(element.text).map((line) => line.replace(/[\r\n]/g, ""));
+      if (!legalRect(bounds.x, bounds.y, Math.max(bounds.w, 1), Math.max(bounds.h, 1))) return;
+      const [x, y] = screen(bounds.x, bounds.y, view);
+      children.push(
+        div()
+          .absolute()
+          .left(x)
+          .top(y)
+          .text_size(LABEL_FONT * view.scale)
+          .text_color(hex)
+          .child(lines.join("\n")),
+      );
+      return;
+    }
+    if (element.points.length < 2) return;
+    const samples = element.points.map(([x, y]) => screen(x, y, view));
+    if (samples.some((point) => !finite(point[0]) || !finite(point[1]))) return;
+    const ink = strokePoly(samples, Math.max(2, 3 * view.scale), hex);
+    if (ink) children.push(ink);
+  };
+
+  for (const element of elements) push(element);
+  if (draft) push(draft);
+
   for (const id of selected) {
     const element = elements.find((item) => item.id === id);
-    if (element) paintHalo(scene, element, elements, next);
-  }
-  for (const key of painted) {
-    if (next.has(key)) continue;
-    const overlay = key.startsWith("overlay:");
-    try {
-      scene.remove(overlay ? key.slice("overlay:".length) : key, overlay);
-    } catch {
-      // A rejected shape never landed, so the next sync has nothing to drop.
+    if (!element) continue;
+    const bounds = boundsOf(element, elements);
+    if (bounds === null) continue;
+    const [x, y] = screen(bounds.x - 4, bounds.y - 4, view);
+    const w = (bounds.w + 8) * view.scale;
+    const h = (bounds.h + 8) * view.scale;
+    if (!finite(x) || !finite(y) || w < 0 || h < 0) continue;
+    const halo = strokeRect(x, y, w, h, 1.5, accentHex);
+    if (halo) children.push(halo);
+    if (element.type === "box" && selected.length === 1) {
+      const side = 8;
+      for (const [hx, hy] of handlePoints(element, view)) {
+        const handle = fillRect(hx - side / 2, hy - side / 2, side, side, accentHex);
+        if (handle) children.push(handle);
+      }
     }
   }
-  painted.clear();
-  for (const key of next) painted.add(key);
+
+  return children;
 }
 
 /**
- * @param {import("gpui-component").SketchScene} scene
- * @param {import("./model.js").ElementRecord} element
- * @param {import("./model.js").ElementRecord[]} elements
- * @param {Map<string, { x: number, y: number, w: number, h: number }>} boxes
- * @param {boolean} overlay
- * @param {Set<string>} next
+ * @param {{ x: number, y: number, w: number, h: number }} box
+ * @param {{ x: number, y: number, scale: number }} view
  */
-function paintElement(scene, element, elements, boxes, overlay, next) {
-  const id = element.id ?? "draft";
-  const color = ink(element.color);
-  const key = (/** @type {string} */ name) => {
-    const stored = overlay ? `overlay:${name}` : name;
-    next.add(stored);
-    return name;
-  };
-  if (element.type === "box") {
-    if (!legalRect(element.x, element.y, element.w, element.h)) return;
-    scene.rect(key(id), element.x, element.y, element.w, element.h, color, 2, seedFor(id), overlay);
-    if (element.label) {
-      const lines = visibleBoxLines(element.label, element.w, element.h).filter((line) => !line.includes("\n"));
-      if (lines.length > 0) {
-        scene.text(key(`${id}:label`), element.x + element.w / 2, element.y + BOX_PAD, lines, LABEL_FONT, "middle", color, overlay);
-      }
-    }
-    return;
-  }
-  if (element.type === "arrow") {
-    const points = element.from || element.to ? arrowRoute(element, boxes).map((point) => [point.x, point.y]) : arrowPoints(element, elements).map((point) => [point.x, point.y]);
-    if (points.length < 2 || points.some((point) => !finite(point[0]) || !finite(point[1]))) return;
-    const heads = element.heads === "none" || element.heads === "start" || element.heads === "both" ? element.heads : "end";
-    scene.line(key(id), points, heads, color, 2, seedFor(id), overlay);
-    if (element.label) {
-      const at = arrowLabelAt(element.label, points.map(([x, y]) => ({ x, y })));
-      if (at && finite(at.x) && finite(at.y)) {
-        scene.text(key(`${id}:label`), at.x, at.y - ARROW_FONT / 2, [element.label.replace(/[\r\n]/g, " ")], ARROW_FONT, "middle", color, overlay);
-      }
-    }
-    return;
-  }
-  if (element.type === "text") {
-    const bounds = textBounds(element.x, element.y, element.text);
-    const lines = textLines(element.text).map((line) => line.replace(/[\r\n]/g, ""));
-    if (!legalRect(bounds.x, bounds.y, Math.max(bounds.w, 1), Math.max(bounds.h, 1))) return;
-    scene.text(key(id), bounds.x, bounds.y, lines, LABEL_FONT, "start", color, overlay);
-    return;
-  }
-  if (element.points.length < 2) return;
-  const samples = element.points.map(([x, y]) => [x, y]);
-  if (samples.some((point) => !finite(point[0]) || !finite(point[1]))) return;
-  scene.ink(key(id), samples, color, 4, overlay);
-}
-
-/**
- * @param {import("gpui-component").SketchScene} scene
- * @param {import("./model.js").ElementRecord} element
- * @param {import("./model.js").ElementRecord[]} elements
- * @param {Set<string>} next
- */
-function paintHalo(scene, element, elements, next) {
-  const bounds = boundsOf(element, elements);
-  if (bounds === null) return;
-  const x = bounds.x - 4;
-  const y = bounds.y - 4;
-  const w = bounds.w + 8;
-  const h = bounds.h + 8;
-  if (!legalRect(x, y, w, h)) return;
-  const name = `sel:${element.id}`;
-  next.add(`overlay:${name}`);
-  scene.rect(name, x, y, w, h, "accent", 1.5, 1, true);
+function handlePoints(box, view) {
+  const [x, y] = screen(box.x, box.y, view);
+  const w = box.w * view.scale;
+  const h = box.h * view.scale;
+  return [
+    [x, y],
+    [x + w / 2, y],
+    [x + w, y],
+    [x + w, y + h / 2],
+    [x + w, y + h],
+    [x + w / 2, y + h],
+    [x, y + h],
+    [x, y + h / 2],
+  ];
 }
 
 /** @param {import("./model.js").ElementRecord} element @param {import("./model.js").ElementRecord[]} elements */

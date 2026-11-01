@@ -1,7 +1,6 @@
 // @ts-check
 
 import { migrate, query, transaction } from "kagan/database";
-import { project } from "kagan/threads";
 import { applyOps, emptyDoc, normalizeName, parseDoc, slug } from "./model.js";
 
 const UNDO_DEPTH = 25;
@@ -170,13 +169,9 @@ export function remove(diagramName) {
   });
 }
 
-/** @param {string | undefined} projectId */
+/** Default canvas name from the on-screen project id (no threads power). */
 export async function projectCanvasName(projectId) {
   if (projectId === undefined || projectId === "") return "canvas";
-  try {
-    const found = await project(projectId);
-    return slug(found.name);
-  } catch {
-    return slug(projectId.replace(/^proj_/, ""));
-  }
+  if (projectId === "personal") return "personal";
+  return slug(projectId.replace(/^proj_/, "")) || "canvas";
 }

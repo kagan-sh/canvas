@@ -1,19 +1,19 @@
 {
   "id": "dev.kagan.canvas",
   "name": "Canvas",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "kagan": ">=0.1.0",
   "entry": "main.js",
   "icon": "icon.svg",
-  "instructions": "A shared drawing canvas sits on a center page. Read it with canvas_read or kg canvas show before changing it. Change it with one canvas_edit call. The drawing is not in the thread until the person sends it.",
+  "instructions": "A shared drawing page. Diagrams live in this plugin's local database. Agents use canvas_read / canvas_edit or kg canvas show. Copy note puts a short pointer on the clipboard for the person to paste into a thread — it does not post to the thread. Clipboard read is for paste of copied shapes.",
   "powers": {
     "clipboard": { "read": true, "write": true },
-    "areas": ["database", "threads"]
+    "areas": ["database"]
   },
   "commands": [
     {
       "id": "open",
-      "title": "Canvas: open",
+      "title": "Show Canvas",
       "key": "secondary-shift-d",
       "when": "thread"
     }

@@ -2,11 +2,11 @@
 
 import { h_flex, v_flex } from "gpui-base";
 import { div, View } from "gpui-kit";
-import { Icon, Input, InputState, Sketch, SketchScene } from "gpui-component";
+import { Icon, Input, InputState } from "gpui-component";
 import { log, toast, context, onContextChanged } from "kagan/host";
 import { clipCenter, copyElements, decodeClip, encodeClip, isBound, pasteOps, translated } from "./clip.js";
 import { boxHeightForLabel } from "./layout.js";
-import { boundsOf, syncScene } from "./paint.js";
+import { boundsOf, renderScene } from "./paint.js";
 import { contentBounds, normalizeName } from "./model.js";
 import { currentGeneration, edit, list, nextChange, open, peek, projectCanvasName, remove, step } from "./store.js";
 
@@ -24,7 +24,7 @@ const COLORS = [
 const TOOLS = [
   ["hand", "Hand — H", "icons/hand.svg"],
   ["select", "Selection — V or 1", "icons/mouse-pointer-2.svg"],
-  ["rect", "Rectangle — R or 2", "icons/square.svg"],
+  ["rect", "Rectangle — drag on the board · R or 2", "icons/square.svg"],
   ["arrow", "Arrow — A or 5", "icons/arrow-right.svg"],
   ["line", "Line — L or 6", "icons/minus.svg"],
   ["pen", "Draw — P or 7", "icons/pencil.svg"],
@@ -32,7 +32,7 @@ const TOOLS = [
   ["erase", "Eraser — E or 0", "icons/eraser.svg"],
 ];
 
-/** Excalidraw's stroke colors. Sketch paints the nearest of its six inks. */
+/** Stroke colors drawn with PathBuilder (shipping kagan has no Sketch). */
 const SWATCH = {
   light: {
     default: "#1e1e1e",
@@ -70,15 +70,11 @@ const MIN_BOX = 16;
 export class CanvasPanel extends View {
   /** @param {import("gpui-shell").Props | undefined} _props @param {import("gpui-kit").AsyncContext} cx */
   init(_props, cx) {
-    this.scene = SketchScene();
-    this.scene.style("hand");
-    this.scene.view(32, 32, 1);
-    this.painted = new Set();
     this.focus = cx.focus_handle();
     this.nameInput = InputState("Canvas name");
-    this.noteInput = InputState("Note to the thread");
+    this.noteInput = InputState("Note for the thread (copied, not sent)");
     this.labelInput = InputState("Label");
-    this.tool = "select";
+    this.tool = "rect";
     this.color = "default";
     this.sticky = false;
     this.viewX = 32;
@@ -110,7 +106,6 @@ export class CanvasPanel extends View {
     this.editing = false;
     /** @type {{ id: string, x: number, y: number, w: number, h: number } | null} */
     this.resize = null;
-    this.handleKeys = /** @type {string[]} */ ([]);
     this.alive = true;
     cx.spawn(async () => {
       await this.follow(context());
@@ -123,7 +118,6 @@ export class CanvasPanel extends View {
         this.doc = doc;
         this.names = await list();
         seen = currentGeneration();
-        this.sync();
         cx.notify();
       }
     });
@@ -155,13 +149,7 @@ export class CanvasPanel extends View {
   }
 
   sync() {
-    if (this.doc === null) return;
-    try {
-      syncScene(this.scene, this.shown(), { x: this.viewX, y: this.viewY, scale: this.scale }, this.selected, this.draft, this.painted);
-      this.paintHandles();
-    } catch (error) {
-      log("error", error instanceof Error ? error.message : String(error));
-    }
+    // Drawing is rebuilt in render via PathBuilder; notify only.
   }
 
   shown() {
@@ -359,26 +347,29 @@ export class CanvasPanel extends View {
       const dy = world.y - gesture.y;
       if (Math.hypot(dx, dy) > 2 / this.scale) gesture.moved = true;
       this.preview = { ids: new Set(this.selected), dx, dy };
-      this.sync();
+      cx.notify();
       return;
     }
     if (gesture.kind === "marquee") {
       const rect = boxBetween(gesture.x, gesture.y, world.x, world.y, false);
       this.draft = { type: "box", id: "draft", ...rect, color: "gray" };
-      this.sync();
+      cx.notify();
       return;
     }
     if (gesture.kind === "erase") {
       this.eraseAt(world);
-      this.sync();
+      cx.notify();
       return;
     }
     if (gesture.kind === "resize") {
       this.resize = resized(gesture, world);
-      this.sync();
+      cx.notify();
       return;
     }
-    if (gesture.kind === "draw") this.previewDraw(gesture, world, event.modifiers.shift);
+    if (gesture.kind === "draw") {
+      this.previewDraw(gesture, world, event.modifiers.shift);
+      cx.notify();
+    }
   }
 
   /** @param {import("gpui-kit").MouseButtonEvent} event @param {import("gpui-kit").Context} cx */
@@ -495,7 +486,6 @@ export class CanvasPanel extends View {
       const points = gesture.points.length < 2 ? [gesture.points[0], gesture.points[0]] : gesture.points;
       this.draft = { type: "path", id: "draft", points, color: this.color };
     }
-    this.sync();
   }
 
   /**
@@ -783,12 +773,12 @@ export class CanvasPanel extends View {
   /** @param {import("gpui-kit").Context} cx */
   sendNote(cx) {
     if (this.doc === null) {
-      toast("Open a canvas first.");
+      toast("Open Canvas from the rail, then try again.");
       return;
     }
     const text = shareText(this.doc, this.noteInput.value());
     cx.write_to_clipboard(text);
-    toast("Copied — paste into the thread.");
+    toast("Copied. Paste into a thread (Cmd+V).");
   }
 
   /**
@@ -864,7 +854,19 @@ export class CanvasPanel extends View {
     else if (this.tool === "hand") layer.cursor_grab();
     else if (this.tool === "select") layer.cursor_default();
     else layer.cursor_crosshair();
-    const frame = div().absolute().inset_0().bg(colors.background).child(new Sketch("surface", this.scene).absolute().inset_0());
+    const theme = context().theme === "dark" ? "dark" : "light";
+    const swatch = SWATCH[theme];
+    const view = { x: this.viewX, y: this.viewY, scale: this.scale };
+    /** @type {import("gpui-kit").Element[]} */
+    const drawn = [];
+    try {
+      drawn.push(
+        ...renderScene(this.shown(), view, this.selected, this.draft, swatch, swatch.blue),
+      );
+    } catch (error) {
+      log("error", error instanceof Error ? error.message : String(error));
+    }
+    const frame = div().absolute().inset_0().bg(colors.background).children(drawn);
     if (empty) {
       frame.child(
         v_flex()
@@ -875,8 +877,8 @@ export class CanvasPanel extends View {
           .gap(8)
           .p(24)
           .text_color(colors.muted_foreground)
-          .child(div().text_sm().child("Pick a tool and start drawing"))
-          .child(div().text_xs().child("Agents draw here too. Send copies a note you can paste into the thread.")),
+          .child(div().text_sm().child("Drag on the board to draw a rectangle"))
+          .child(div().text_xs().child("Copy note (bottom right) puts text on the clipboard to paste into a thread.")),
       );
     }
     return frame.child(layer);
@@ -1006,7 +1008,7 @@ export class CanvasPanel extends View {
       this.menu = false;
       this.fit(ctx);
     }));
-    panel.child(this.menuRow("canvas-clear", "Reset the canvas", false, colors, (ctx) => {
+    panel.child(this.menuRow("canvas-clear", "Clear all shapes", false, colors, (ctx) => {
       this.menu = false;
       this.selected = [];
       this.apply([{ op: "clear" }], ctx, false);
@@ -1176,39 +1178,8 @@ export class CanvasPanel extends View {
           .p(4)
           .gap(4)
           .child(div().flex_1().min_w(0).child(new Input(this.noteInput)))
-          .child(this.square("canvas-send", "icons/send.svg", "Send to the thread", false, colors, (ctx) => this.sendNote(ctx))),
+          .child(this.square("canvas-send", "icons/copy.svg", "Copy note for the thread", false, colors, (ctx) => this.sendNote(ctx))),
       );
-  }
-
-  /**
-   * @param {number} factor
-   * @param {import("gpui-kit").Context} cx
-   */
-  paintHandles() {
-    for (const key of this.handleKeys) {
-      try {
-        this.scene.remove(key, true);
-      } catch {
-        // The handle was never accepted.
-      }
-      this.painted.delete(`overlay:${key}`);
-    }
-    this.handleKeys = [];
-    if (this.tool !== "select" || this.selected.length !== 1) return;
-    const element = this.shown().find((item) => item.id === this.selected[0]);
-    if (element === undefined || element.type !== "box") return;
-    const side = 8 / this.scale;
-    for (const handle of HANDLES) {
-      const [hx, hy] = handlePoint(element, handle);
-      const key = `handle:${handle}`;
-      try {
-        this.scene.rect(key, hx - side / 2, hy - side / 2, side, side, "accent", 1.2, 1, true);
-        this.handleKeys.push(key);
-        this.painted.add(`overlay:${key}`);
-      } catch {
-        // A handle past the world edge is skipped.
-      }
-    }
   }
 
   /** @param {{ x: number, y: number }} world */

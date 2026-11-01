@@ -32,7 +32,7 @@ Approve the powers in the window, then open **Canvas** from the rail or press
 | ⌘ + wheel, ⌘+ / ⌘- | Zoom. ⌘0 resets, Shift+1 fits |
 
 Each project has its own canvas by default. The menu (top left) switches
-canvases, makes a new one, clears one, or deletes one. **Send** copies a short
+canvases, makes a new one, clears one, or deletes one.  **Copy note** copies a short
 note plus `kg canvas show <name>` so you can paste it into a thread without
 putting the drawing in the context.
 
