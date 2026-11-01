@@ -22,7 +22,14 @@ export function emptyDoc(name) {
 
 /** @param {string} name */
 export function normalizeName(name) {
-  return name.trim().toLowerCase().replace(/\s+/g, "-");
+  const cleaned = name
+    .normalize("NFKC")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "-")
+    .slice(0, 80);
+  return cleaned;
 }
 
 /** @param {string} name */
@@ -440,6 +447,12 @@ export function parseDoc(value, name) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error(`canvas "${name}" is unreadable`);
   const raw = /** @type {Record<string, unknown>} */ (value);
   if (!Array.isArray(raw.elements) || typeof raw.rev !== "number" || typeof raw.next !== "number") {
+    throw new Error(`canvas "${name}" is unreadable`);
+  }
+  if (!Number.isFinite(raw.rev) || !Number.isInteger(raw.rev) || raw.rev < 0) {
+    throw new Error(`canvas "${name}" is unreadable`);
+  }
+  if (!Number.isFinite(raw.next) || !Number.isInteger(raw.next) || raw.next < 1) {
     throw new Error(`canvas "${name}" is unreadable`);
   }
   /** @type {ElementRecord[]} */

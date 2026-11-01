@@ -107,6 +107,8 @@ export class CanvasPanel extends View {
     /** @type {{ id: string, x: number, y: number, w: number, h: number } | null} */
     this.resize = null;
     this.alive = true;
+    this.pendingDelete = "";
+    this.wantEdit = false;
     cx.spawn(async () => {
       await this.follow(context());
       cx.notify();
@@ -114,9 +116,22 @@ export class CanvasPanel extends View {
       for (;;) {
         seen = await nextChange(seen);
         if (!this.alive || this.name === "") continue;
-        const doc = (await peek(this.name)) ?? (await open(this.name));
-        this.doc = doc;
+        const doc = await peek(this.name);
         this.names = await list();
+        if (doc === null) {
+          // Do not recreate a deleted canvas; fall back to the project default.
+          const fallback = this.projectName || "canvas";
+          if (this.name !== fallback) {
+            toast(`Canvas "${this.name}" was deleted.`);
+            this.resetSession(fallback);
+            this.doc = await open(fallback);
+            this.nameInput.set_value(this.name);
+          } else {
+            this.doc = null;
+          }
+        } else {
+          this.doc = doc;
+        }
         seen = currentGeneration();
         cx.notify();
       }
@@ -134,18 +149,30 @@ export class CanvasPanel extends View {
     });
   }
 
+  /** @param {string} [name] */
+  resetSession(name) {
+    if (name !== undefined) this.name = name;
+    this.wantEdit = false;
+    this.editing = false;
+    this.gesture = null;
+    this.preview = null;
+    this.draft = null;
+    this.resize = null;
+    this.selected = [];
+    this.hidden = new Set();
+    this.pendingDelete = "";
+  }
+
   /** @param {ReturnType<typeof context>} ctx */
   async follow(ctx) {
     this.projectId = ctx.projectId ?? "";
     this.threadId = ctx.threadId;
     this.projectName = await projectCanvasName(ctx.projectId);
     if (this.pinned) return;
-    this.name = this.projectName;
+    this.resetSession(this.projectName);
     this.nameInput.set_value(this.name);
     this.doc = await open(this.name);
     this.names = await list();
-    this.selected = [];
-    this.sync();
   }
 
   sync() {
@@ -190,7 +217,10 @@ export class CanvasPanel extends View {
     cx.spawn(async (taskCx) => {
       try {
         const result = await edit(name, ops);
-        if (!this.alive || this.name !== name) return;
+        if (!this.alive || this.name !== name) {
+          this.wantEdit = false;
+          return;
+        }
         this.doc = result.doc;
         if (result.added.length > 0) this.selected = result.added;
         if (this.wantEdit) {
@@ -715,18 +745,21 @@ export class CanvasPanel extends View {
   /** @param {import("gpui-kit").Context} cx */
   useName(cx) {
     const name = normalizeName(this.nameInput.value());
-    if (name === "") return;
+    if (name === "") {
+      toast("Enter a canvas name (letters, numbers, dashes).");
+      return;
+    }
     this.pinned = true;
-    this.name = name;
-    this.selected = [];
+    this.resetSession(name);
+    this.naming = false;
     cx.spawn(async (taskCx) => {
       try {
         this.doc = await open(name);
         this.names = await list();
-        this.sync();
         taskCx.notify();
       } catch (error) {
         log("error", error instanceof Error ? error.message : String(error));
+        toast(error instanceof Error ? error.message : String(error));
       }
     });
   }
@@ -742,9 +775,18 @@ export class CanvasPanel extends View {
     }
     this.nameInput.set_value(name);
     this.pinned = true;
-    this.name = name;
-    this.selected = [];
-    open(name).catch((error) => log("error", String(error)));
+    this.resetSession(name);
+    this.doc = null;
+    cx.spawn(async (taskCx) => {
+      try {
+        this.doc = await open(name);
+        this.names = await list();
+        taskCx.notify();
+      } catch (error) {
+        log("error", error instanceof Error ? error.message : String(error));
+        toast(error instanceof Error ? error.message : String(error));
+      }
+    });
     cx.notify();
   }
 
@@ -752,22 +794,30 @@ export class CanvasPanel extends View {
   deleteCanvas(cx) {
     const name = this.name;
     if (name === "") return;
+    if (this.pendingDelete !== name) {
+      this.pendingDelete = name;
+      toast("Click Delete again to confirm.");
+      cx.notify();
+      return;
+    }
+    this.pendingDelete = "";
     this.pinned = false;
-    this.name = this.projectName || "canvas";
+    const next = this.projectName || "canvas";
+    this.resetSession(next);
     this.nameInput.set_value(this.name);
-    const next = this.name;
+    this.doc = null;
     cx.spawn(async (taskCx) => {
       try {
         await remove(name);
         this.doc = await open(next);
         this.names = await list();
-        this.selected = [];
-        this.sync();
         taskCx.notify();
       } catch (error) {
         log("error", error instanceof Error ? error.message : String(error));
+        toast(error instanceof Error ? error.message : String(error));
       }
     });
+    cx.notify();
   }
 
   /** @param {import("gpui-kit").Context} cx */

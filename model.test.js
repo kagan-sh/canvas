@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { applyOps, arrowEnds, emptyDoc, exportText, layoutReport } from "./model.js";
+import { applyOps, arrowEnds, emptyDoc, exportText, layoutReport, normalizeName, parseDoc } from "./model.js";
 
 test("ids increase and are never reused; deleting a box deletes its arrows", () => {
   const first = applyOps(emptyDoc("t"), [
@@ -130,4 +130,18 @@ test("no element ever carries an undefined value", () => {
     for (const [key, value] of Object.entries(element)) assert.notEqual(value, undefined, `${element.id}.${key} is undefined`);
   }
   assert.equal(JSON.parse(JSON.stringify(detached)).elements.length, 4);
+});
+
+test("normalizeName caps length and strips zero-width", () => {
+  assert.equal(normalizeName(`  Foo\u200B Bar  `), "foo-bar");
+  assert.equal(normalizeName("x".repeat(200)).length, 80);
+});
+
+test("parseDoc rejects non-finite rev and next", () => {
+  assert.throws(() => parseDoc({ rev: NaN, next: 1, elements: [] }, "bad"));
+  assert.throws(() => parseDoc({ rev: 1.5, next: 1, elements: [] }, "bad"));
+  assert.throws(() => parseDoc({ rev: 0, next: 0, elements: [] }, "bad"));
+  const ok = parseDoc({ rev: 0, next: 1, elements: [] }, "ok");
+  assert.equal(ok.rev, 0);
+  assert.equal(ok.next, 1);
 });

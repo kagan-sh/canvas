@@ -64,11 +64,12 @@ export function encodeClip(clip) {
 
 /** @param {string} text */
 export function decodeClip(text) {
+  if (typeof text !== "string" || text.length === 0 || text.length > 256_000) return null;
   try {
     const parsed = JSON.parse(text);
     if (parsed === null || typeof parsed !== "object") return null;
     if (parsed.kaganCanvas !== 1 && parsed.bbCanvas !== 1 && parsed.makerspaceCanvas !== 1) return null;
-    if (!Array.isArray(parsed.elements) || parsed.elements.length === 0) return null;
+    if (!Array.isArray(parsed.elements) || parsed.elements.length === 0 || parsed.elements.length > 500) return null;
     return /** @type {import("./model.js").ElementRecord[]} */ (parsed.elements);
   } catch {
     return null;
