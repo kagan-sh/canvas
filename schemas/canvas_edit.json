@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "ops"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80,
+      "description": "Canvas name. Names ignore case and spaces. The canvas must already exist."
+    },
+    "ops": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 500,
+      "description": "Applied in order, all or nothing. Ops are add, update, move, delete, or clear.",
+      "items": {
+        "type": "object",
+        "required": ["op"],
+        "properties": {
+          "op": { "enum": ["add", "update", "move", "delete", "clear"] },
+          "as": { "type": "string", "description": "Alias for an element added in this call. Not an id like b1." },
+          "id": { "type": "string", "description": "Element id or an alias from this call." },
+          "dx": { "type": "number" },
+          "dy": { "type": "number" },
+          "element": { "type": "object" },
+          "patch": { "type": "object" }
+        }
+      }
+    }
+  }
+}
