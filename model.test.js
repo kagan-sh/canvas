@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { contentOffscreen } from "./layout.js";
 import { applyOps, arrowEnds, emptyDoc, exportText, layoutReport, normalizeName, parseDoc } from "./model.js";
 
 test("ids increase and are never reused; deleting a box deletes its arrows", () => {
@@ -130,6 +131,15 @@ test("no element ever carries an undefined value", () => {
     for (const [key, value] of Object.entries(element)) assert.notEqual(value, undefined, `${element.id}.${key} is undefined`);
   }
   assert.equal(JSON.parse(JSON.stringify(detached)).elements.length, 4);
+});
+
+test("content is off screen only when the view misses every shape", () => {
+  const bounds = { x: 0, y: 0, w: 100, h: 40 };
+  assert.equal(contentOffscreen(bounds, 32, 32, 1, 400, 300), false);
+  assert.equal(contentOffscreen(bounds, -200, 32, 1, 400, 300), true);
+  assert.equal(contentOffscreen(bounds, 32, -80, 1, 400, 300), true);
+  assert.equal(contentOffscreen(bounds, -100, 32, 1, 400, 300), false);
+  assert.equal(contentOffscreen(null, 0, 0, 1, 400, 300), false);
 });
 
 test("normalizeName caps length and strips zero-width", () => {

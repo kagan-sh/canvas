@@ -1,14 +1,26 @@
 {
   "id": "dev.kagan.canvas",
   "name": "Canvas",
-  "version": "0.1.2",
+  "version": "0.1.6",
   "kagan": ">=0.1.0",
   "entry": "main.js",
   "icon": "icon.svg",
-  "instructions": "A shared drawing page. Diagrams live in this plugin's local database. Agents use canvas_read / canvas_edit or kg canvas show. Copy note puts a short pointer on the clipboard for the person to paste into a thread — it does not post to the thread. Clipboard read is for paste of copied shapes.",
+  "instructions": "A shared drawing page. Diagrams live in this plugin's local database. Agents use canvas_read / canvas_edit or kg canvas show. Send pastes a short pointer into a chosen thread in the current project without submitting it (host.pasteIntoThread, or kg thread paste). The thread list uses the threads area. Clipboard read is for paste of copied shapes. Copy as image stays off: the clipboard call only accepts text.",
   "powers": {
-    "clipboard": { "read": true, "write": true },
-    "areas": ["database"]
+    "clipboard": {
+      "read": true,
+      "write": true
+    },
+    "areas": [
+      "database",
+      "process",
+      "threads"
+    ],
+    "run": [
+      {
+        "program": "kg"
+      }
+    ]
   },
   "commands": [
     {
@@ -24,7 +36,7 @@
         "id": "canvas",
         "title": "Canvas",
         "view": "CanvasPanel",
-        "placement": "center",
+        "placement": "right",
         "follows": "thread"
       }
     ]
@@ -47,10 +59,18 @@
     {
       "name": "canvas",
       "commands": [
-        { "name": "list", "usage": "list" },
-        { "name": "show", "usage": "show <name>" }
+        {
+          "name": "list",
+          "usage": "list"
+        },
+        {
+          "name": "show",
+          "usage": "show <name>"
+        }
       ]
     }
   ],
-  "skills": ["skills/canvas"]
+  "skills": [
+    "skills/canvas"
+  ]
 }

@@ -2,10 +2,12 @@
 
 import { h_flex, v_flex } from "gpui-base";
 import { div, View } from "gpui-kit";
-import { Icon, Input, InputState } from "gpui-component";
+import { Input, InputState, KgButton, Select } from "gpui-component";
 import { log, toast, context, onContextChanged } from "kagan/host";
+import * as host from "kagan/host";
+import { list as listThreads } from "kagan/threads";
 import { clipCenter, copyElements, decodeClip, encodeClip, isBound, pasteOps, translated } from "./clip.js";
-import { boxHeightForLabel } from "./layout.js";
+import { boxHeightForLabel, contentOffscreen } from "./layout.js";
 import { boundsOf, renderScene } from "./paint.js";
 import { contentBounds, normalizeName } from "./model.js";
 import { currentGeneration, edit, list, nextChange, open, peek, projectCanvasName, remove, step } from "./store.js";
@@ -22,15 +24,20 @@ const COLORS = [
 ];
 
 const TOOLS = [
-  ["hand", "Hand — H", "icons/hand.svg"],
-  ["select", "Selection — V or 1", "icons/mouse-pointer-2.svg"],
-  ["rect", "Rectangle — drag on the board · R or 2", "icons/square.svg"],
-  ["arrow", "Arrow — A or 5", "icons/arrow-right.svg"],
-  ["line", "Line — L or 6", "icons/minus.svg"],
-  ["pen", "Draw — P or 7", "icons/pencil.svg"],
-  ["text", "Text — T or 8", "icons/type.svg"],
-  ["erase", "Eraser — E or 0", "icons/eraser.svg"],
+  ["hand", "H", "Hand (panning tool) — H", "icons/hand.svg"],
+  ["select", "V", "Selection — V or 1", "icons/mouse-pointer-2.svg"],
+  ["rect", "R", "Rectangle — drag on the board · R or 2", "icons/square.svg"],
+  ["arrow", "A", "Arrow — A or 5", "icons/arrow-right.svg"],
+  ["line", "L", "Line — L or 6", "icons/minus.svg"],
+  ["pen", "P", "Draw — P or 7", "icons/pencil.svg"],
+  ["text", "T", "Text — T or 8", "icons/type.svg"],
+  ["erase", "E", "Eraser — E or 0", "icons/eraser.svg"],
 ];
+
+/** Right-sidebar default is 320px. Under this, shortcut letters hide and tool targets grow. */
+const NARROW_PANEL = 420;
+/** `cx.write_to_clipboard` stores a string. It cannot place an image/png. */
+const COPY_IMAGE_REASON = "Copy as image needs a PNG on the clipboard. This host only accepts text.";
 
 /** Stroke colors drawn with PathBuilder (shipping kagan has no Sketch). */
 const SWATCH = {
@@ -72,7 +79,7 @@ export class CanvasPanel extends View {
   init(_props, cx) {
     this.focus = cx.focus_handle();
     this.nameInput = InputState("Canvas name");
-    this.noteInput = InputState("Note for the thread (copied, not sent)");
+    this.noteInput = InputState("What should the agent do with this?");
     this.labelInput = InputState("Label");
     this.tool = "rect";
     this.color = "default";
@@ -107,8 +114,15 @@ export class CanvasPanel extends View {
     /** @type {{ id: string, x: number, y: number, w: number, h: number } | null} */
     this.resize = null;
     this.alive = true;
-    this.pendingDelete = "";
+    this.confirmDelete = false;
+    this.confirmName = "";
     this.wantEdit = false;
+    this.narrow = true;
+    this.sending = false;
+    this.sendTarget = "";
+    /** @type {{ id: string, title: string }[]} */
+    this.threads = [];
+    this.threadsError = "";
     cx.spawn(async () => {
       await this.follow(context());
       cx.notify();
@@ -141,10 +155,9 @@ export class CanvasPanel extends View {
         const next = await onContextChanged();
         if (!this.alive) return;
         this.threadId = next.threadId;
-        if (!this.pinned && next.projectId !== this.projectId) {
-          await this.follow(next);
-          cx.notify();
-        }
+        if (!this.pinned && next.projectId !== this.projectId) await this.follow(next);
+        else await this.refreshThreads();
+        cx.notify();
       }
     });
   }
@@ -160,7 +173,8 @@ export class CanvasPanel extends View {
     this.resize = null;
     this.selected = [];
     this.hidden = new Set();
-    this.pendingDelete = "";
+    this.confirmDelete = false;
+    this.confirmName = "";
   }
 
   /** @param {ReturnType<typeof context>} ctx */
@@ -168,11 +182,57 @@ export class CanvasPanel extends View {
     this.projectId = ctx.projectId ?? "";
     this.threadId = ctx.threadId;
     this.projectName = await projectCanvasName(ctx.projectId);
+    await this.refreshThreads();
     if (this.pinned) return;
     this.resetSession(this.projectName);
     this.nameInput.set_value(this.name);
     this.doc = await open(this.name);
     this.names = await list();
+  }
+
+  async refreshThreads() {
+    const projectId = this.projectId;
+    if (projectId === "") {
+      this.threads = [];
+      return;
+    }
+    try {
+      const threads = await listThreads({ projectId, archived: false, limit: 50 });
+      if (!this.alive || this.projectId !== projectId) return;
+      this.threads = threads.map((thread) => ({ id: thread.id, title: thread.title ?? "" }));
+      this.threadsError = "";
+      const open = this.threadId ?? "";
+      if (this.sendTarget !== "" && this.sendTarget !== open && !this.threads.some((thread) => thread.id === this.sendTarget)) {
+        this.sendTarget = "";
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (this.threadsError !== message) {
+        this.threadsError = message;
+        log("warn", message);
+        toast(message);
+      }
+    }
+  }
+
+  threadChoices() {
+    const open = this.threadId ?? "";
+    /** @type {{ id: string, label: string, disabled?: boolean }[]} */
+    const rows = [];
+    if (open !== "") rows.push({ id: open, label: "This thread" });
+    for (const thread of this.threads) {
+      if (thread.id === open) continue;
+      const title = thread.title.trim();
+      rows.push({ id: thread.id, label: title !== "" ? title : thread.id });
+    }
+    if (rows.length === 0) rows.push({ id: "none", label: "This thread", disabled: true });
+    return rows;
+  }
+
+  chosenThread() {
+    const open = this.threadId || context().threadId || "";
+    if (this.sendTarget !== "" && (this.sendTarget === open || this.threads.some((thread) => thread.id === this.sendTarget))) return this.sendTarget;
+    return open;
   }
 
   sync() {
@@ -295,9 +355,18 @@ export class CanvasPanel extends View {
     this.viewY = local.y - world.y * this.scale;
   }
 
-  /** @param {import("gpui-kit").MouseMoveEvent | import("gpui-kit").MouseButtonEvent | import("gpui-kit").ScrollWheelEvent} event */
-  remember(event) {
-    if (event.bounds) this.viewport = { w: event.bounds.width, h: event.bounds.height };
+  /**
+   * @param {import("gpui-kit").MouseMoveEvent | import("gpui-kit").MouseButtonEvent | import("gpui-kit").ScrollWheelEvent} event
+   * @param {import("gpui-kit").Context} [cx]
+   */
+  remember(event, cx) {
+    if (!event.bounds) return;
+    this.viewport = { w: event.bounds.width, h: event.bounds.height };
+    const narrow = event.bounds.width < NARROW_PANEL;
+    if (narrow !== this.narrow) {
+      this.narrow = narrow;
+      cx?.notify();
+    }
   }
 
   /** @param {import("gpui-kit").MouseButtonEvent} event @param {import("gpui-kit").Context} cx */
@@ -305,7 +374,7 @@ export class CanvasPanel extends View {
     const local = event.local_position;
     if (local === undefined || this.doc === null) return;
     this.focus.focus();
-    this.remember(event);
+    this.remember(event, cx);
     const world = this.toWorld(local);
     this.pointer = world;
     if (event.click_count >= 2) {
@@ -358,7 +427,7 @@ export class CanvasPanel extends View {
   move(event, cx) {
     const local = event.local_position;
     if (local === undefined) return;
-    this.remember(event);
+    this.remember(event, cx);
     const world = this.toWorld(local);
     this.pointer = world;
     const gesture = this.gesture;
@@ -554,7 +623,7 @@ export class CanvasPanel extends View {
   wheel(event, cx) {
     const local = event.local_position;
     if (local === undefined) return;
-    this.remember(event);
+    this.remember(event, cx);
     if (event.modifiers.platform) {
       const dy = event.delta_lines?.y ?? event.delta.y / 40;
       this.zoomAt(local, this.scale * Math.exp(-dy * 0.35));
@@ -607,6 +676,13 @@ export class CanvasPanel extends View {
       return;
     }
     if (event.key === "escape") {
+      if (this.confirmDelete) {
+        this.confirmDelete = false;
+        this.confirmName = "";
+        cx.notify();
+        cx.stop_propagation();
+        return;
+      }
       this.selected = [];
       this.draft = null;
       this.preview = null;
@@ -792,24 +868,22 @@ export class CanvasPanel extends View {
 
   /** @param {import("gpui-kit").Context} cx */
   deleteCanvas(cx) {
-    const name = this.name;
+    const name = this.confirmName || this.name;
     if (name === "") return;
-    if (this.pendingDelete !== name) {
-      this.pendingDelete = name;
-      toast("Click Delete again to confirm.");
-      cx.notify();
-      return;
-    }
-    this.pendingDelete = "";
+    this.confirmDelete = false;
+    this.confirmName = "";
     this.pinned = false;
     const next = this.projectName || "canvas";
-    this.resetSession(next);
-    this.nameInput.set_value(this.name);
-    this.doc = null;
+    const leaving = this.name === name;
+    if (leaving) {
+      this.resetSession(next);
+      this.nameInput.set_value(this.name);
+      this.doc = null;
+    }
     cx.spawn(async (taskCx) => {
       try {
         await remove(name);
-        this.doc = await open(next);
+        if (leaving && this.name === next) this.doc = await open(next);
         this.names = await list();
         taskCx.notify();
       } catch (error) {
@@ -822,13 +896,40 @@ export class CanvasPanel extends View {
 
   /** @param {import("gpui-kit").Context} cx */
   sendNote(cx) {
+    if (this.sending) return;
     if (this.doc === null) {
       toast("Open Canvas from the rail, then try again.");
       return;
     }
+    const threadId = this.chosenThread();
+    if (!threadId) {
+      toast("Open a thread on the left, then try again.");
+      return;
+    }
     const text = shareText(this.doc, this.noteInput.value());
-    cx.write_to_clipboard(text);
-    toast("Copied. Paste into a thread (Cmd+V).");
+    this.sending = true;
+    cx.notify();
+    cx.spawn(async () => {
+      try {
+        if (typeof host.pasteIntoThread === "function") {
+          await host.pasteIntoThread(threadId, text);
+        } else {
+          const { run } = await import("kagan/process");
+          const result = await run("kg", ["thread", "paste", threadId, text]);
+          if (result.exitCode !== 0) {
+            throw new Error((result.stderr || result.stdout || "kg paste failed").trim());
+          }
+        }
+        this.noteInput.set_value("");
+        toast("Pasted into the thread.");
+      } catch (error) {
+        cx.write_to_clipboard(text);
+        toast("Could not paste into the thread. Copied the note instead.");
+        log("warn", `paste failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      this.sending = false;
+      cx.notify();
+    });
   }
 
   /**
@@ -866,11 +967,19 @@ export class CanvasPanel extends View {
   /** @param {import("gpui-kit").Context} cx */
   render(cx) {
     const colors = cx.theme().colors;
-    const root = div().id("canvas-root").relative().size_full().overflow_hidden().bg(colors.background).text_color(colors.foreground).child(this.surface(colors));
+    const root = div()
+      .id("canvas-root")
+      .relative()
+      .size_full()
+      .overflow_hidden()
+      .bg(colors.background)
+      .text_color(colors.foreground)
+      .on_mouse_move((event, ctx) => this.remember(event, ctx))
+      .child(this.surface(colors));
     root.child(this.topBar(colors));
-    if (!this.menu && this.showStyle()) root.child(this.stylePanel(colors));
     root.child(this.bottomBar(colors));
     if (this.menu) root.child(this.dismiss()).child(this.menuPanel(colors));
+    if (this.confirmDelete) root.child(this.deleteDialog(colors));
     return root;
   }
 
@@ -927,8 +1036,8 @@ export class CanvasPanel extends View {
           .gap(8)
           .p(24)
           .text_color(colors.muted_foreground)
-          .child(div().text_sm().child("Drag on the board to draw a rectangle"))
-          .child(div().text_xs().child("Copy note (bottom right) puts text on the clipboard to paste into a thread.")),
+          .child(div().text_lg().child("Pick a tool and start drawing!"))
+          .child(div().text_sm().child("Agents draw here too. Send the canvas to a thread below.")),
       );
     }
     return frame.child(layer);
@@ -970,12 +1079,41 @@ export class CanvasPanel extends View {
         ctx.notify();
       }))
       .child(div().w(1).h(24).mx(4).bg(colors.border))
-      .children(TOOLS.map(([tool, tip, icon]) => this.square(`tool-${tool}`, icon, tip, this.tool === tool, colors, (ctx) => {
+      .children(TOOLS.map(([tool, letter, tip, icon]) => this.toolButton(tool, letter, tip, icon, colors)));
+  }
+
+  /**
+   * @param {string} tool
+   * @param {string} letter
+   * @param {string} tip
+   * @param {string} icon
+   * @param {import("gpui-base").ColorTokens} colors
+   */
+  toolButton(tool, letter, tip, icon, colors) {
+    const button = this.square(`tool-${tool}`, icon, tip, this.tool === tool, colors, (ctx) => {
+      this.tool = tool;
+      this.editing = false;
+      this.menu = false;
+      ctx.notify();
+    });
+    if (this.narrow) button.size("large").min_w(44).min_h(44);
+    const cell = div()
+      .relative()
+      .flex()
+      .items_center()
+      .justify_center()
+      .on_mouse_down("left", (_event, ctx) => {
         this.tool = tool;
         this.editing = false;
         this.menu = false;
         ctx.notify();
-      })));
+      });
+    if (this.narrow) cell.w(44).h(44);
+    cell.child(button);
+    if (!this.narrow) {
+      cell.child(div().absolute().right(2).bottom(0).text_size(10).text_color(colors.muted_foreground).child(letter));
+    }
+    return cell;
   }
 
   /**
@@ -983,28 +1121,15 @@ export class CanvasPanel extends View {
    * @param {string} mark
    * @param {string} tip
    * @param {boolean} active
-   * @param {import("gpui-base").ColorTokens} colors
+   * @param {import("gpui-base").ColorTokens} _colors
    * @param {(cx: import("gpui-kit").Context) => void} onClick
    */
-  square(id, mark, tip, active, colors, onClick) {
-    return h_flex()
-      .id(id)
-      .relative()
-      .w(36)
-      .h(36)
-      .flex_none()
-      .items_center()
-      .justify_center()
-      .rounded_md()
-      .cursor_pointer()
-      .tooltip(tip)
-      .bg(active ? colors.accent : colors.background)
-      .text_color(active ? colors.accent_foreground : colors.foreground)
-      .hover((style) => {
-        style.bg(active ? colors.accent : colors.secondary);
-      })
-      .on_click((_event, ctx) => onClick(ctx))
-      .child(mark.endsWith(".svg") ? new Icon(mark).size("small").color(active ? colors.accent_foreground : colors.foreground) : mark);
+  square(id, mark, tip, active, _colors, onClick) {
+    const name = tip.split("—")[0].split("·")[0].trim();
+    const button = new KgButton(id).tooltip(tip).ghost().compact().selected(active).on_click((_event, ctx) => onClick(ctx));
+    if (mark.endsWith(".svg")) button.icon(mark).label(name);
+    else button.label(mark);
+    return button;
   }
 
   dismiss() {
@@ -1058,14 +1183,18 @@ export class CanvasPanel extends View {
       this.menu = false;
       this.fit(ctx);
     }));
-    panel.child(this.menuRow("canvas-clear", "Clear all shapes", false, colors, (ctx) => {
+    panel.child(this.copyImageRow());
+    panel.child(this.menuRow("canvas-clear", "Reset the canvas", false, colors, (ctx) => {
       this.menu = false;
       this.selected = [];
       this.apply([{ op: "clear" }], ctx, false);
     }));
     panel.child(this.menuRow("canvas-delete", "Delete this canvas", false, colors, (ctx) => {
       this.menu = false;
-      this.deleteCanvas(ctx);
+      if (this.name === "") return;
+      this.confirmName = this.name;
+      this.confirmDelete = true;
+      ctx.notify();
     }));
     return panel;
   }
@@ -1074,26 +1203,107 @@ export class CanvasPanel extends View {
    * @param {string} id
    * @param {string} label
    * @param {boolean} current
-   * @param {import("gpui-base").ColorTokens} colors
+   * @param {import("gpui-base").ColorTokens} _colors
    * @param {(cx: import("gpui-kit").Context) => void} onClick
    */
-  menuRow(id, label, current, colors, onClick) {
-    return h_flex()
-      .id(id)
-      .h(32)
+  menuRow(id, label, current, _colors, onClick) {
+    return new KgButton(id).label(current ? `✓ ${label}` : label).ghost().compact().w_full().on_click((_event, ctx) => onClick(ctx));
+  }
+
+  copyImageRow() {
+    const row = this.menuRow("canvas-copy-image", "Copy as image", false, /** @type {import("gpui-base").ColorTokens} */ ({}), () => {});
+    row.disabled(true).tooltip(COPY_IMAGE_REASON);
+    return div()
+      .relative()
       .w_full()
-      .px(8)
-      .gap(8)
+      .child(row)
+      .child(
+        div()
+          .absolute()
+          .inset_0()
+          .on_mouse_down("left", (_event, ctx) => {
+            this.menu = false;
+            toast(COPY_IMAGE_REASON);
+            ctx.notify();
+            ctx.stop_propagation();
+          }),
+      );
+  }
+
+  /** @param {import("gpui-base").ColorTokens} colors */
+  deleteDialog(colors) {
+    const name = this.confirmName || this.name;
+    return div()
+      .absolute()
+      .inset_0()
+      .flex()
       .items_center()
-      .rounded_md()
-      .cursor_pointer()
-      .text_color(current ? colors.primary : colors.foreground)
-      .hover((style) => {
-        style.bg(colors.secondary);
-      })
-      .on_click((_event, ctx) => onClick(ctx))
-      .child(div().w(16).child(current ? "✓" : ""))
-      .child(div().flex_1().truncate().child(label));
+      .justify_center()
+      .child(
+        div()
+          .absolute()
+          .inset_0()
+          .bg(colors.foreground)
+          .opacity(0.35)
+          .on_mouse_down("left", (_event, ctx) => {
+            this.confirmDelete = false;
+            this.confirmName = "";
+            ctx.notify();
+            ctx.stop_propagation();
+          }),
+      )
+      .child(
+        v_flex()
+          .relative()
+          .w(320)
+          .max_w_full()
+          .m(16)
+          .p(16)
+          .gap(8)
+          .bg(colors.background)
+          .border(1)
+          .border_color(colors.border)
+          .rounded_lg()
+          .shadow_lg()
+          .on_mouse_down("left", (_event, ctx) => ctx.stop_propagation())
+          .child(div().text_base().font_semibold().child(`Delete “${name}”?`))
+          .child(div().text_sm().text_color(colors.muted_foreground).child("Its shapes will be removed. Deleting a canvas cannot be undone."))
+          .child(
+            h_flex()
+              .justify_end()
+              .gap(8)
+              .mt(8)
+              .child(
+                new KgButton("canvas-keep").label("Keep canvas").outline().compact().on_click((_event, ctx) => {
+                  this.confirmDelete = false;
+                  this.confirmName = "";
+                  ctx.notify();
+                }),
+              )
+              .child(new KgButton("canvas-delete-confirm").label("Delete canvas").danger().compact().on_click((_event, ctx) => this.deleteCanvas(ctx))),
+          ),
+      );
+  }
+
+  offscreen() {
+    if (this.viewport === null || this.doc === null) return false;
+    return contentOffscreen(contentBounds(this.doc), this.viewX, this.viewY, this.scale, this.viewport.w, this.viewport.h);
+  }
+
+  threadPicker() {
+    return new Select(
+      "canvas-thread",
+      () => this.threadChoices(),
+      () => null,
+      (value, ctx) => {
+        if (value === "none") return;
+        this.sendTarget = value;
+        ctx.notify();
+      },
+    )
+      .placeholder("This thread")
+      .accessibility_label("Send to")
+      .w_full();
   }
 
   /** @param {import("gpui-base").ColorTokens} colors */
@@ -1103,10 +1313,7 @@ export class CanvasPanel extends View {
     const current = this.strokeColor();
     const arrows = this.doc?.elements.filter((element) => element.type === "arrow" && element.id !== undefined && this.selected.includes(element.id)) ?? [];
     const panel = v_flex()
-      .absolute()
-      .top(104)
-      .left(12)
-      .w(202)
+      .w(220)
       .p(12)
       .gap(12)
       .bg(colors.background)
@@ -1190,11 +1397,22 @@ export class CanvasPanel extends View {
 
   /** @param {import("gpui-base").ColorTokens} colors */
   bottomBar(colors) {
-    return h_flex()
+    const bar = v_flex()
       .absolute()
       .bottom(12)
       .left(12)
       .right(12)
+      .gap(8);
+    if (this.offscreen()) {
+      bar.child(
+        h_flex()
+          .justify_center()
+          .child(new KgButton("canvas-scroll-back").label("Scroll back to content").outline().compact().on_click((_event, ctx) => this.fit(ctx))),
+      );
+    }
+    if (!this.menu && this.showStyle()) bar.child(this.stylePanel(colors));
+    return bar.child(h_flex()
+      .flex_wrap()
       .items_end()
       .gap(8)
       .child(
@@ -1222,14 +1440,25 @@ export class CanvasPanel extends View {
           .child(this.square("canvas-redo", "icons/redo-2.svg", "Redo", false, colors, (ctx) => this.history("redo", ctx))),
       )
       .child(
-        island(colors)
+        v_flex()
           .flex_1()
-          .min_w(0)
+          .min_w("10rem")
           .p(4)
           .gap(4)
-          .child(div().flex_1().min_w(0).child(new Input(this.noteInput)))
-          .child(this.square("canvas-send", "icons/copy.svg", "Copy note for the thread", false, colors, (ctx) => this.sendNote(ctx))),
-      );
+          .bg(colors.background)
+          .border(1)
+          .border_color(colors.border)
+          .rounded_lg()
+          .shadow_md()
+          .child(this.threadPicker())
+          .child(
+            h_flex()
+              .gap(4)
+              .items_center()
+              .child(div().flex_1().min_w("8rem").child(new Input(this.noteInput).aria_label("Note for the agent")))
+              .child(new KgButton("canvas-send").label("Send").primary().compact().disabled(this.sending).on_click((_event, ctx) => this.sendNote(ctx))),
+          ),
+      ));
   }
 
   /** @param {{ x: number, y: number }} world */

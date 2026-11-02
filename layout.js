@@ -206,6 +206,26 @@ function contains(outer, inner) {
   return inner.x >= outer.x && inner.y >= outer.y && inner.x + inner.w <= outer.x + outer.w && inner.y + inner.h <= outer.y + outer.h;
 }
 
+/**
+ * Screen pan: a world point lands at `world * scale + view`. The drawing is off
+ * screen when its box misses that window entirely.
+ *
+ * @param {{ x: number, y: number, w: number, h: number } | null} bounds
+ * @param {number} viewX
+ * @param {number} viewY
+ * @param {number} scale
+ * @param {number} width
+ * @param {number} height
+ */
+export function contentOffscreen(bounds, viewX, viewY, scale, width, height) {
+  if (bounds === null || !(width > 0) || !(height > 0) || !(scale > 0)) return false;
+  const left = -viewX / scale;
+  const top = -viewY / scale;
+  const right = left + width / scale;
+  const bottom = top + height / scale;
+  return bounds.x + bounds.w < left || bounds.x > right || bounds.y + bounds.h < top || bounds.y > bottom;
+}
+
 /** @param {Array<{ id: string, x: number, y: number, w: number, h: number, label?: string }>} boxes */
 export function layoutNotes(boxes) {
   /** @type {string[]} */

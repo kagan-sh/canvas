@@ -31,10 +31,15 @@ Approve the powers in the window, then open **Canvas** from the rail or press
 | Space + drag, wheel | Pan |
 | ⌘ + wheel, ⌘+ / ⌘- | Zoom. ⌘0 resets, Shift+1 fits |
 
-Each project has its own canvas by default. The menu (top left) switches
-canvases, makes a new one, clears one, or deletes one.  **Copy note** copies a short
-note plus `kg canvas show <name>` so you can paste it into a thread without
-putting the drawing in the context.
+Each project has its own canvas by default. The menu (top left) lists canvases,
+then New canvas, Zoom to fit, Copy as image, Reset the canvas, and Delete this
+canvas. Delete asks once: Keep canvas, or Delete canvas. Pan until the drawing
+leaves the window and **Scroll back to content** fits it again.
+
+**Send** puts a short note plus `kg canvas show <name>` into the thread you pick
+(this thread, or another in the project) without submitting it, so the drawing
+stays out of the context. Copy as image stays off: the clipboard only accepts
+text, and the row says so.
 
 ## Agents
 

@@ -17,12 +17,15 @@ function legalRect(x, y, w, h) {
 }
 
 /**
+ * World → surface pixels. `view.x` / `view.y` are screen pan (same as panel `viewX` /
+ * `viewY`): local = world * scale + pan. Matches `toWorld` in panel.js.
+ *
  * @param {number} wx
  * @param {number} wy
  * @param {{ x: number, y: number, scale: number }} view
  */
 function screen(wx, wy, view) {
-  return [(wx - view.x) * view.scale, (wy - view.y) * view.scale];
+  return [wx * view.scale + view.x, wy * view.scale + view.y];
 }
 
 /**
