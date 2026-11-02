@@ -1302,7 +1302,6 @@ export class CanvasPanel extends View {
       },
     )
       .placeholder("This thread")
-      .accessibility_label("Send to")
       .w_full();
   }
 
