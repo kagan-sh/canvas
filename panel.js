@@ -909,7 +909,7 @@ export class CanvasPanel extends View {
     const text = shareText(this.doc, this.noteInput.value());
     this.sending = true;
     cx.notify();
-    cx.spawn(async () => {
+    cx.spawn(async (taskCx) => {
       try {
         if (typeof host.pasteIntoThread === "function") {
           await host.pasteIntoThread(threadId, text);
@@ -923,12 +923,12 @@ export class CanvasPanel extends View {
         this.noteInput.set_value("");
         toast("Pasted into the thread.");
       } catch (error) {
-        cx.write_to_clipboard(text);
+        taskCx.write_to_clipboard(text);
         toast("Could not paste into the thread. Copied the note instead.");
         log("warn", `paste failed: ${error instanceof Error ? error.message : String(error)}`);
       }
       this.sending = false;
-      cx.notify();
+      taskCx.notify();
     });
   }
 
@@ -1196,6 +1196,7 @@ export class CanvasPanel extends View {
       this.confirmDelete = true;
       ctx.notify();
     }));
+    panel.on_mouse_down("left", (_event, ctx) => ctx.stop_propagation());
     return panel;
   }
 
