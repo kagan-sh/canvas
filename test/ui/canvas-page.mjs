@@ -434,6 +434,12 @@ async function savedDrag(browser, width) {
     });
     await page.waitForTimeout(400);
     const before = await view(page);
+    const onScreen = await page.evaluate(() => {
+      const frame = document.querySelector("svg.cv-svg").getBoundingClientRect();
+      const box = document.querySelector("svg.cv-svg [data-id]").getBoundingClientRect();
+      return box.left >= frame.left && box.right <= frame.right && box.top >= frame.top && box.bottom <= frame.bottom;
+    });
+    check(`k. a saved drawing is fitted on screen after the panel is ${width} px`, onScreen, JSON.stringify(before));
     const grab = await page.evaluate(() => {
       const r = document.querySelector("svg.cv-svg [data-id]").getBoundingClientRect();
       const x = r.left + r.width / 2;
