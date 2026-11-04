@@ -263,7 +263,7 @@ function Canvas() {
   );
   const open = useCallback(
     (name?: string) => {
-      // Keep the same array when nothing is selected. A new empty array would look like a selection change to the effects that watch selectedIds.
+      // A new empty array would look like a selection change to the effects that watch selectedIds.
       setSelectedIds((ids) => (ids.length === 0 ? ids : []));
       setEditing(null);
       refetch(name);

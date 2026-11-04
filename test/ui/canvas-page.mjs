@@ -420,7 +420,6 @@ async function narrowDraw(browser, { coarse = false } = {}) {
   }
 }
 
-// A drawing saved before the page opens. Its first open fits it to the screen.
 async function savedDrag(browser, width) {
   const seed = { Main: [{ op: "add", element: { type: "box", x: 400, y: 200, w: 160, h: 100, label: "saved" } }] };
   const { server, context, page, problems } = await openPage(browser, "light", { seed });
