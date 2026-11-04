@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
-import type { Doc, Element, Op } from "../model.ts";
-import { applyOps, arrowLabelRect, arrowPoints, contentBounds } from "../model.ts";
+import type { Doc, Element } from "../model.ts";
+import { arrowLabelRect, arrowPoints, contentBounds } from "../diagram.ts";
 import { clipCenter, copyElements, decodeClip, encodeClip, isBound, pasteOps } from "../clip.ts";
 import { boxHeightForLabel, type Point } from "../layout.ts";
 import {
@@ -14,8 +14,8 @@ import {
   LINE_H,
   type Color,
 } from "../constants.ts";
-import { seedOf, sketchArrow, sketchBox, sketchFreehand } from "../sketch.ts";
-import { fitView, NARROW_CANVAS, pinchView, type PinchStart, type ScreenPoint } from "../gesture.ts";
+import { seedOf, sketchArrow, sketchBox, sketchFreehand } from "./sketch.ts";
+import { COARSE_NARROW, fitView, NARROW_CANVAS, pinchView, type PinchStart, type ScreenPoint } from "./gesture.ts";
 import { standaloneSvg } from "../export.ts";
 import {
   ArrowIcon,
@@ -38,9 +38,7 @@ import {
   UndoIcon,
   ZoomInIcon,
   ZoomOutIcon,
-} from "../icons.tsx";
-import { valueSchemas, type ApplyValue, type ContextValue, type ListValue, type OpenValue, type ThreadsValue, type ThreadRow } from "../protocol.ts";
-import { call, onPush } from "./client.ts";
+} from "./icons.tsx";
 import {
   HANDLES,
   HANDLE_CURSOR,
@@ -64,7 +62,10 @@ import {
   type View,
 } from "./geometry.ts";
 import { Shape, Strokes, TextEditor } from "./shapes.tsx";
+import { SendBar } from "./SendBar.tsx";
+import { useDocument } from "./useDocument.ts";
 import { toast, Toasts } from "./toast.tsx";
+import { errorMessage } from "../errors.ts";
 import { embeddedFontCss, pngFromSvg, TooLarge, uploadPng } from "./png.ts";
 import { useCoarsePointer, useTheme } from "./theme.ts";
 
@@ -90,32 +91,17 @@ const ERASER_CURSOR = `url("data:image/svg+xml,${encodeURIComponent(
 let clipboard: Element[] | null = null;
 
 const isField = (target: EventTarget | null) => /^(INPUT|TEXTAREA|SELECT)$/.test((target as HTMLElement | null)?.tagName ?? "");
-const messageOf = (cause: unknown) => (cause instanceof Error ? cause.message : String(cause));
-const docOf = (value: unknown): Doc => ((value as { doc?: Doc }).doc ?? (value as Doc));
 
-const api = {
-  open: (args: { threadId?: string; name?: string }) => call<OpenValue>({ call: "open", ...args }, valueSchemas.open),
-  list: () => call<ListValue>({ call: "list" }, valueSchemas.list),
-  threads: (threadId: string) => call<ThreadsValue>({ call: "threads", threadId }, valueSchemas.threads),
-  context: () => call<ContextValue>({ call: "context" }, valueSchemas.context),
-};
 
 function Canvas() {
   const theme = useTheme();
   const coarse = useCoarsePointer();
-  const [doc, setDoc] = useState<Doc | null>(null);
-  const [names, setNames] = useState<string[]>([]);
   const [tool, setTool] = useState<Tool>("select");
   const [locked, setLocked] = useState(false);
   const [color, setColor] = useState<Color>("default");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [drag, setDrag] = useState<Drag | null>(null);
   const [hoverBox, setHoverBox] = useState<string | null>(null);
-  const [threadId, setThreadId] = useState<string | null>(null);
-  const [threads, setThreads] = useState<ThreadRow[]>([]);
-  const [target, setTarget] = useState<string>("");
-  const [note, setNote] = useState("");
-  const [sending, setSending] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [newName, setNewName] = useState<string | null>(null);
@@ -141,26 +127,10 @@ function Canvas() {
   const svgRef = useRef<SVGSVGElement>(null);
   const frameRef = useRef<HTMLDivElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
-  const nameRef = useRef<string | null>(null);
-  const threadRef = useRef<string | null>(null);
   const fittedRef = useRef<string | null>(null);
   // A pan or zoom is the person's own framing. Until then, a resize refits.
   const userMoved = useRef(false);
-  // Set when a push says an agent changed the canvas, so the next load brings that work into view.
-  const revealRef = useRef(false);
   const spaceRef = useRef(false);
-  // The doc as last shown, so back-to-back edits build on each other before React re-renders.
-  const docRef = useRef<Doc | null>(null);
-  // Plugin calls still out, per canvas. While any is out the page shows its own edits,
-  // and a fetched doc, which predates them, would snap the drawing back.
-  const pendingRef = useRef(new Map<string, number>());
-  // Bumped on every doc the page shows from its own edits, so a fetch sent earlier is dropped.
-  const epochRef = useRef(0);
-  // The newest rev a push announced, and whether a failed call left the page unsure.
-  const seenRevRef = useRef(0);
-  const staleRef = useRef(false);
-  // Once the person picks a canvas, a thread change no longer switches it.
-  const pickedRef = useRef(false);
   const pointerRef = useRef<{ clientX: number; clientY: number } | null>(null);
   const viewRef = useRef(view);
   viewRef.current = view;
@@ -168,11 +138,6 @@ function Canvas() {
   const pointersRef = useRef(new Map<number, ScreenPoint>());
   const pinchRef = useRef<PinchStart | null>(null);
   const suppressRef = useRef(false);
-
-  const elements = useMemo(() => doc?.elements ?? [], [doc]);
-  // Another writer may delete what is selected here, so the selection is whatever still exists.
-  const selected = useMemo(() => elements.filter((e) => selectedIds.includes(e.id)), [elements, selectedIds]);
-  const selection = selected.map((e) => e.id);
 
   // Hold space to drag the canvas around, as every drawing tool does.
   useEffect(() => {
@@ -204,18 +169,17 @@ function Canvas() {
     return () => observer.disconnect();
   }, []);
 
-  const fail = (cause: unknown) => toast.error(messageOf(cause));
-  const show = useCallback((next: Doc) => {
-    docRef.current = next;
-    setDoc(next);
+  // The document session owns loading, optimistic edits, and undo. These callbacks keep the
+  // editor's own concerns (selection, framing) in the editor.
+  const docNameRef = useRef<string | null>(null);
+  const beforeLoad = useCallback(() => {
+    setSelectedIds((ids) => (ids.length === 0 ? ids : []));
+    setEditing(null);
   }, []);
-  const pendingFor = (name: string) => pendingRef.current.get(name) ?? 0;
-  const refreshNames = useCallback(() => {
-    api.list().then((r) => setNames(r.names), fail);
+  const beforeApply = useCallback(() => {
+    if (docNameRef.current !== null && fittedRef.current === docNameRef.current) userMoved.current = true;
   }, []);
-
-  // Pans, and zooms out if needed, so the elements an agent just changed are on screen.
-  const revealElements = useCallback((before: Doc, after: Doc) => {
+  const reveal = useCallback((before: Doc, after: Doc) => {
     const was = new Map(before.elements.map((element) => [element.id, JSON.stringify(element)]));
     const changed = after.elements.filter((element) => was.get(element.id) !== JSON.stringify(element));
     const bounds = contentBounds({ ...after, elements: changed });
@@ -229,95 +193,17 @@ function Canvas() {
       return { scale, x: bounds.x + bounds.w / 2 - w / scale / 2, y: bounds.y + bounds.h / 2 - h / scale / 2 };
     });
   }, []);
+  const session = useDocument({ beforeLoad, beforeApply, reveal });
+  const { doc, names, threadId } = session;
+  docNameRef.current = doc?.name ?? null;
+  const pick = session.pick;
+  const apply = session.apply;
+  const step = session.step;
 
-  const refetch: (name?: string) => void = useCallback(
-    (name?: string) => {
-      const epoch = epochRef.current;
-      const thread = threadRef.current;
-      api.open(name !== undefined ? { name } : thread !== null ? { threadId: thread } : {}).then((next) => {
-        if (next.name === nameRef.current) {
-          // `settle` fetches again once the calls still out are in.
-          if ((pendingRef.current.get(next.name) ?? 0) > 0) {
-            staleRef.current = true;
-            return;
-          }
-          if (epoch !== epochRef.current) {
-            refetch(next.name);
-            return;
-          }
-        }
-        if (next.name !== nameRef.current) {
-          seenRevRef.current = 0;
-          staleRef.current = false;
-        }
-        nameRef.current = next.name;
-        const reveal = revealRef.current;
-        revealRef.current = false;
-        const before = docRef.current;
-        show(next.doc);
-        if (reveal && before !== null && before.name === next.doc.name) revealElements(before, next.doc);
-      }, fail);
-      refreshNames();
-    },
-    [show, refreshNames, revealElements],
-  );
-  const open = useCallback(
-    (name?: string) => {
-      // Keep the same array when nothing is selected: the layout effect that freezes the fit treats a new array as a change.
-      setSelectedIds((ids) => (ids.length === 0 ? ids : []));
-      setEditing(null);
-      refetch(name);
-    },
-    [refetch],
-  );
-  const pick = useCallback(
-    (name: string) => {
-      pickedRef.current = true;
-      open(name);
-    },
-    [open],
-  );
-
-  // The thread on screen. The page asks for it when it opens, since a push only comes on a change.
-  const takeContext = useCallback(
-    (threadOnScreen: string | null) => {
-      threadRef.current = threadOnScreen;
-      setThreadId(threadOnScreen);
-      setTarget(threadOnScreen ?? "");
-      if (threadOnScreen === null) setThreads([]);
-      else api.threads(threadOnScreen).then((r) => setThreads(r.threads), (cause) => toast.error(messageOf(cause)));
-      if (!pickedRef.current) open();
-    },
-    [open],
-  );
-
-  useEffect(() => {
-    open();
-    api.context().then((current) => takeContext(current.threadId), (cause) => toast.error(messageOf(cause)));
-  }, [open, takeContext]);
-  useEffect(
-    () =>
-      onPush((push) => {
-        if (push.push === "context") {
-          takeContext(push.threadId);
-        } else if (push.push === "changed") {
-          const name = nameRef.current;
-          if (name !== null && push.name === name) {
-            seenRevRef.current = Math.max(seenRevRef.current, push.rev);
-            if (pendingFor(name) === 0 && push.rev !== docRef.current?.rev) {
-              revealRef.current = true;
-              refetch(name);
-            }
-          } else refreshNames();
-        } else if (push.push === "deleted") {
-          if (push.name === nameRef.current) {
-            pickedRef.current = false;
-            open();
-          } else refreshNames();
-        }
-      }),
-    [takeContext, refetch, refreshNames],
-  );
+  const elements = useMemo(() => doc?.elements ?? [], [doc]);
+  // Another writer may delete what is selected here, so the selection is whatever still exists.
+  const selected = useMemo(() => elements.filter((e) => selectedIds.includes(e.id)), [elements, selectedIds]);
+  const selection = selected.map((e) => e.id);
 
   // A PNG of the whole drawing on the clipboard, for a pull request, an issue, or chat outside kagan.
   const copyImage = useCallback(async () => {
@@ -337,10 +223,10 @@ function Canvas() {
       toast.info("Copied the canvas as an image");
     } catch (cause) {
       if (cause instanceof TooLarge) toast.error(cause.message);
-      else toast.error("Couldn't copy the canvas as an image", messageOf(cause));
+      else toast.error("Couldn't copy the canvas as an image", errorMessage(cause));
     }
   }, [doc]);
-  const narrow = measured && (size.w < NARROW_CANVAS || (coarse && size.w < 1100));
+  const narrow = measured && (size.w < NARROW_CANVAS || (coarse && size.w < COARSE_NARROW));
   const touch = narrow && coarse;
   const fit = useCallback(() => {
     userMoved.current = false;
@@ -362,69 +248,16 @@ function Canvas() {
   );
   // The first measurement is often a frame before the panel settles. Keep fitting until the person pans or zooms.
   useEffect(() => {
-    if (!measured || docRef.current === null) return;
-    if (fittedRef.current !== docRef.current.name) {
-      fittedRef.current = docRef.current.name;
+    if (!measured || doc === null) return;
+    if (fittedRef.current !== doc.name) {
+      fittedRef.current = doc.name;
       userMoved.current = false;
     }
     if (userMoved.current) return;
-    setView(fitView(contentBounds(docRef.current), size.w, size.h));
-  }, [doc?.name, measured, size.h, size.w]);
+    setView(fitView(contentBounds(doc), size.w, size.h));
+  }, [doc, measured, size.h, size.w]);
   // A selection or a tool change grows the bottom bar; that must not re-center a fitted drawing under the person's hand.
-  const freezeFit = () => {
-    if (docRef.current !== null && fittedRef.current === docRef.current.name) userMoved.current = true;
-  };
-  useLayoutEffect(freezeFit, [tool, selectedIds, editing, menuOpen, paletteOpen]);
-
-  /** Shows a plugin call's doc only when no other call for the canvas is still out, then
-   * fetches again if a push or a failure says the page may be behind. */
-  const settle = useCallback(
-    async <T,>(name: string, request: Promise<T>, docFrom: (result: T) => Doc): Promise<T | null> => {
-      pendingRef.current.set(name, (pendingRef.current.get(name) ?? 0) + 1);
-      try {
-        const result = await request;
-        if (pendingRef.current.get(name) === 1 && nameRef.current === name) {
-          epochRef.current++;
-          show(docFrom(result));
-        }
-        return result;
-      } catch (cause) {
-        fail(cause);
-        staleRef.current = true;
-        return null;
-      } finally {
-        const left = (pendingRef.current.get(name) ?? 1) - 1;
-        pendingRef.current.set(name, left);
-        if (left === 0 && nameRef.current === name && (staleRef.current || seenRevRef.current > (docRef.current?.rev ?? 0))) {
-          staleRef.current = false;
-          refetch(name);
-        }
-      }
-    },
-    [show, refetch],
-  );
-
-  /** Shows the edit at once: waiting for the round trip snaps a dropped shape back to where
-   * it started for a frame. Resolves with the ids the plugin assigned. */
-  const apply = useCallback(
-    async (ops: Op[]): Promise<string[]> => {
-      const current = docRef.current;
-      if (current === null || ops.length === 0) return [];
-      try {
-        const local = applyOps(current, ops).doc;
-        epochRef.current++;
-        show(local);
-        // The chrome changes height after an edit, so keep the framing the person already had.
-        userMoved.current = true;
-      } catch (cause) {
-        fail(cause);
-        return [];
-      }
-      const result = await settle(current.name, call<ApplyValue>({ call: "apply", name: current.name, ops }, valueSchemas.apply), (r) => r.doc);
-      return result?.added ?? [];
-    },
-    [show, settle],
-  );
+  useLayoutEffect(beforeApply, [tool, selectedIds, editing, menuOpen, paletteOpen]);
 
   useEffect(() => {
     const svg = svgRef.current;
@@ -494,7 +327,8 @@ function Canvas() {
   };
 
   const toWorld = (event: { clientX: number; clientY: number }): Point => {
-    const rect = svgRef.current!.getBoundingClientRect();
+    const rect = svgRef.current?.getBoundingClientRect();
+    if (rect === undefined) return { x: 0, y: 0 };
     return { x: Math.round(view.x + (event.clientX - rect.left) / view.scale), y: Math.round(view.y + (event.clientY - rect.top) / view.scale) };
   };
   // Pointer capture retargets moves to the svg, so the eraser asks what is under the pointer.
@@ -530,6 +364,7 @@ function Canvas() {
     if (current.id === null) {
       if (text === "") return;
       void apply([{ op: "add", element: { type: "text", x: current.at.x, y: current.at.y + LABEL_FONT, text, color } }]).then((ids) => {
+        if (ids === null) return;
         setSelectedIds(ids);
         finishTool();
       });
@@ -554,7 +389,7 @@ function Canvas() {
 
   const onDown = (event: ReactPointerEvent<SVGSVGElement>) => {
     if (doc === null) return;
-    freezeFit();
+    beforeApply();
     setMenuOpen(false);
     setPaletteOpen(false);
     rootRef.current?.focus({ preventScroll: true });
@@ -619,13 +454,13 @@ function Canvas() {
     else setDrag({ kind: "shape", start: p, current: p });
   };
 
-  /** Where the shape being drawn ends. An arrow over a box attaches to it, and snapping
-   * would pull the end off the box, so Shift only snaps a free end. */
-  const shapePoint = (start: Point, p: Point, shift: boolean): Point => {
+  /** Where the shape being drawn ends, and the box an arrow end would attach to. An arrow
+   * over a box attaches to it, and snapping would pull the end off the box, so Shift only
+   * snaps a free end. */
+  const shapeEnd = (start: Point, p: Point, shift: boolean): { at: Point; hover: string | null } => {
     const linking = tool === "arrow" || tool === "line";
     const over = linking ? boxAt(elements, p) : undefined;
-    if (linking) setHoverBox(over ?? null);
-    return shift && over === undefined ? constrained(tool, start, p) : p;
+    return { at: shift && over === undefined ? constrained(tool, start, p) : p, hover: over ?? null };
   };
 
   const onMove = (event: ReactPointerEvent<SVGSVGElement>) => {
@@ -668,9 +503,12 @@ function Canvas() {
         setDrag({ ...drag, current: p });
         return;
       }
-      case "shape":
-        setDrag({ ...drag, current: shapePoint(drag.start, p, event.shiftKey) });
+      case "shape": {
+        const next = shapeEnd(drag.start, p, event.shiftKey);
+        setHoverBox(next.hover);
+        setDrag({ ...drag, current: next.at });
         return;
+      }
       default:
         setDrag({ ...drag, current: p });
     }
@@ -681,7 +519,9 @@ function Canvas() {
     const onShift = (event: KeyboardEvent) => {
       if (event.key !== "Shift" || pointerRef.current === null) return;
       const p = toWorld(pointerRef.current);
-      setDrag({ ...drag, current: shapePoint(drag.start, p, event.type === "keydown") });
+      const next = shapeEnd(drag.start, p, event.type === "keydown");
+      setHoverBox(next.hover);
+      setDrag({ ...drag, current: next.at });
     };
     window.addEventListener("keydown", onShift);
     window.addEventListener("keyup", onShift);
@@ -735,6 +575,7 @@ function Canvas() {
           const rect = normalized(start, current);
           if (rect.w < 4 || rect.h < 4) return;
           void apply([{ op: "add", element: { type: "box", ...rect, color } }]).then((ids) => {
+            if (ids === null) return;
             setSelectedIds(ids);
             finishTool();
           });
@@ -750,6 +591,7 @@ function Canvas() {
               element: { type: "arrow", x1: start.x, y1: start.y, x2: current.x, y2: current.y, heads: tool === "line" ? "none" : "end", color, ...attachment },
             },
           ]).then((ids) => {
+            if (ids === null) return;
             setSelectedIds(ids);
             finishTool();
           });
@@ -781,7 +623,7 @@ function Canvas() {
   };
   const pasteClip = (clip: Element[], dx: number, dy: number) =>
     void apply(pasteOps(clip, Math.round(dx), Math.round(dy))).then((ids) => {
-      if (ids.length > 0) {
+      if (ids !== null && ids.length > 0) {
         setTool("select");
         setSelectedIds(ids);
       }
@@ -806,9 +648,9 @@ function Canvas() {
     if (clip !== null) pasteHere(clip);
     else if (text.trim() !== "") {
       const at = pasteTarget();
-      void apply([{ op: "add", element: { type: "text", x: Math.round(at.x), y: Math.round(at.y), text: text.trim().slice(0, 500), color } }]).then((ids) =>
-        setSelectedIds(ids),
-      );
+      void apply([{ op: "add", element: { type: "text", x: Math.round(at.x), y: Math.round(at.y), text: text.trim().slice(0, 500), color } }]).then((ids) => {
+        if (ids !== null) setSelectedIds(ids);
+      });
     } else if (clipboard !== null) pasteHere(clipboard);
   };
   // Cmd+C, X, and V arrive as these events, from the keyboard and the Edit menu alike: one path per
@@ -826,15 +668,6 @@ function Canvas() {
   };
   const nudge = (dx: number, dy: number) => void apply(selected.filter((e) => !isBound(e)).map((e) => ({ op: "move", id: e.id, dx, dy })));
 
-  const step = useCallback(
-    (direction: "undo" | "redo") => {
-      const name = nameRef.current;
-      if (name === null) return;
-      userMoved.current = true;
-      void settle(name, call<unknown>({ call: direction, name }, valueSchemas[direction]), docOf);
-    },
-    [settle],
-  );
   const clear = () => {
     setMenuOpen(false);
     setSelectedIds([]);
@@ -842,17 +675,10 @@ function Canvas() {
   };
   const removeDiagram = () => {
     if (!deleteName) return;
-    const removing = deleteName;
-    call<unknown>({ call: "delete", name: removing }, valueSchemas.delete).then((result) => {
-      setDeleteName(null);
-      const left = (result as { names?: string[] } | null)?.names;
-      if (left !== undefined) setNames(left);
-      else refreshNames();
-      if (nameRef.current === removing) {
-        pickedRef.current = false;
-        open(left?.[0]);
-      }
-    }, fail);
+    session.remove(deleteName).then(
+      () => setDeleteName(null),
+      (cause) => toast.error("Couldn't delete the canvas", errorMessage(cause)),
+    );
   };
 
   const onKeyDown = (event: KeyboardEvent) => {
@@ -933,20 +759,6 @@ function Canvas() {
     };
   }, []);
 
-  const send = async () => {
-    if (nameRef.current === null || sending || target === "") return;
-    setSending(true);
-    try {
-      await call({ call: "send", name: nameRef.current, threadId: target, note }, valueSchemas.send);
-      setNote("");
-      toast.info("Pasted into the thread. Press Enter there to send it.");
-    } catch (cause) {
-      fail(cause);
-    } finally {
-      setSending(false);
-    }
-  };
-
   const dragged = drag?.kind === "move" || drag?.kind === "resize" ? elements.map((e) => previewed(e, drag)) : elements;
   // A box grows to hold the label as it is typed, as it will once the label is saved.
   const shown =
@@ -997,7 +809,6 @@ function Canvas() {
   const handleBox = selected.length === 1 && selected[0]!.type === "box" && drag?.kind !== "move" ? outlines[0] : undefined;
   const hovered = hoverBox === null ? undefined : elements.find((e) => e.id === hoverBox);
   const canvasNames = doc && !names.includes(doc.name) ? [doc.name, ...names] : names;
-  const sendReason = threadId === null ? "Open a thread to send this canvas to it." : null;
 
   return (
     <div ref={rootRef} className={["cv-root", narrow && "cv-narrow", touch && "cv-touch"].filter(Boolean).join(" ")} tabIndex={0}>
@@ -1272,7 +1083,7 @@ function Canvas() {
               className="cv-menu-item"
               onClick={() => {
                 setMenuOpen(false);
-                setDeleteName(nameRef.current);
+                setDeleteName(doc?.name ?? null);
               }}
             >
               <span className="cv-check">
@@ -1395,36 +1206,7 @@ function Canvas() {
               <RedoIcon />
             </button>
           </div>
-          <div className="cv-island cv-send">
-            <select aria-label="Send to" className="cv-select" value={target} onChange={(e) => setTarget(e.target.value)}>
-              {threads.length === 0 ? <option value="">No threads</option> : null}
-              {threads.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.id === threadId ? "This thread" : t.title} · {t.status}
-                </option>
-              ))}
-            </select>
-            <input
-              className="cv-field cv-note"
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") void send();
-              }}
-              placeholder={narrow ? "Note for the agent" : "What should the agent do with this?"}
-              aria-label="Note for the agent"
-            />
-            <button type="button" className="cv-primary" onClick={() => void send()} disabled={sending || doc === null || target === ""}>
-              Send
-            </button>
-            <p className="cv-caption">
-              {sendReason ?? (
-                <>
-                  Pastes your note and <code>kg canvas show {doc?.name ?? "name"}</code> into the thread. Press Enter there to send it.
-                </>
-              )}
-            </p>
-          </div>
+          <SendBar threadId={threadId} canvasName={doc?.name ?? null} narrow={narrow} />
         </div>
       </div>
       {deleteName !== null ? <ConfirmDelete name={deleteName} onKeep={() => setDeleteName(null)} onDelete={removeDiagram} /> : null}
@@ -1434,6 +1216,7 @@ function Canvas() {
 
 function ConfirmDelete({ name, onKeep, onDelete }: { name: string; onKeep: () => void; onDelete: () => void }) {
   const keepRef = useRef<HTMLButtonElement>(null);
+  const deleteRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     keepRef.current?.focus();
   }, []);
@@ -1451,6 +1234,11 @@ function ConfirmDelete({ name, onKeep, onDelete }: { name: string; onKeep: () =>
             event.preventDefault();
             onKeep();
           }
+          // Two buttons, so Tab cycles between them instead of leaving the dialog.
+          if (event.key === "Tab") {
+            event.preventDefault();
+            (document.activeElement === keepRef.current ? deleteRef : keepRef).current?.focus();
+          }
         }}
       >
         <h2 id="delete-title">Delete “{name}”?</h2>
@@ -1459,7 +1247,7 @@ function ConfirmDelete({ name, onKeep, onDelete }: { name: string; onKeep: () =>
           <button ref={keepRef} type="button" className="cv-outline" onClick={onKeep}>
             Keep canvas
           </button>
-          <button type="button" className="cv-danger" onClick={onDelete}>
+          <button ref={deleteRef} type="button" className="cv-danger" onClick={onDelete}>
             Delete canvas
           </button>
         </div>

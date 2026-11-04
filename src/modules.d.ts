@@ -39,6 +39,7 @@ declare module "kagan/threads" {
   export function get(id: string): Promise<Thread>;
   export function list(options?: { projectId?: string; limit?: number }): Promise<Thread[]>;
   export function project(id: string): Promise<Project>;
+  export function projects(): Promise<Project[]>;
 }
 
 declare module "kagan/database" {

@@ -1,10 +1,10 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import type { Doc, Element } from "../model.ts";
-import { arrowLabelRect, arrowPoints } from "../model.ts";
+import { arrowLabelRect, arrowPoints } from "../diagram.ts";
 import { boxLabelLines, longestSegment, textBounds, textLines, textWidth, visibleBoxLines, type Point, type Rect } from "../layout.ts";
 import { ARROW_FONT, BOX_PAD, COLOR_CSS, FONT_FAMILY, LABEL_FONT, LINE_H, type Color, type Theme } from "../constants.ts";
-import { seedOf, sketchArrow, sketchBox, sketchFreehand, type SketchPath } from "../sketch.ts";
+import { seedOf, sketchArrow, sketchBox, sketchFreehand, type SketchPath } from "./sketch.ts";
 import type { Heads, View } from "./geometry.ts";
 import type { Editing } from "./geometry.ts";
 

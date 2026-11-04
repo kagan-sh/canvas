@@ -1,10 +1,11 @@
-import { PNG_CHUNK_CHARS, PNG_MAX_BYTES, valueSchemas } from "../protocol.ts";
+import { PNG_CHUNK_CHARS, PNG_MAX_BYTES } from "../protocol.ts";
 import { call } from "./client.ts";
 
 const MAX_SIDE = 8192;
 let fontCss: Promise<string> | null = null;
 
-function base64(bytes: Uint8Array): string {
+/** Base64 without a data: prefix, as the clipboard call takes it. */
+export function base64(bytes: Uint8Array): string {
   let out = "";
   for (let i = 0; i < bytes.length; i += 0x8000) out += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
   return btoa(out);
@@ -52,6 +53,6 @@ export async function uploadPng(png: Blob): Promise<void> {
   const upload = crypto.randomUUID();
   const count = Math.max(1, Math.ceil(text.length / PNG_CHUNK_CHARS));
   for (let index = 0; index < count; index++) {
-    await call({ call: "pngChunk", upload, index, last: index === count - 1, data: text.slice(index * PNG_CHUNK_CHARS, (index + 1) * PNG_CHUNK_CHARS) }, valueSchemas.pngChunk);
+    await call({ call: "pngChunk", upload, index, last: index === count - 1, data: text.slice(index * PNG_CHUNK_CHARS, (index + 1) * PNG_CHUNK_CHARS) });
   }
 }

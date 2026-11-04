@@ -1,6 +1,7 @@
 import { z } from "zod";
 
-import { arrowPoints, contentBounds, elementSchema, emptyDoc, type Element, type ElementInput, type Op } from "./model.ts";
+import { arrowPoints, contentBounds } from "./diagram.ts";
+import { elementSchema, emptyDoc, type Element, type ElementInput, type Op } from "./model.ts";
 
 export const isBound = (e: Element) => e.type === "arrow" && (e.from !== undefined || e.to !== undefined);
 
@@ -45,7 +46,8 @@ export function pasteOps(clip: Element[], dx: number, dy: number): Op[] {
       const { id: _id, from, to, ...free } = e;
       if (from !== undefined && to !== undefined && boxes.has(from) && boxes.has(to))
         return { op: "add", element: { ...free, from: alias(from), to: alias(to) } };
-      const { id: _freeId, ...element } = translated(free as Element, dx, dy);
+      const moved = translated({ ...free, id: e.id }, dx, dy);
+      const { id: _freeId, ...element } = moved;
       return { op: "add", element: element as ElementInput };
     }
     const { id, ...element } = translated(e, dx, dy);

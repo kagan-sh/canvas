@@ -1,7 +1,9 @@
-import { MAX_SCALE, MIN_SCALE } from "./constants.ts";
+import { MAX_SCALE, MIN_SCALE } from "../constants.ts";
 
 /** A panel below this width hides the key hints and shortens the copy. A phone in portrait sits under it; a touch screen counts as narrow below 1100 px. */
 export const NARROW_CANVAS = 720;
+/** A touch screen counts as narrow below this width, because its chrome is larger. */
+export const COARSE_NARROW = 1100;
 
 export type CanvasView = { x: number; y: number; scale: number };
 export type ScreenPoint = { x: number; y: number };

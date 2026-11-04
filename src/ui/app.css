@@ -475,6 +475,16 @@ body {
   justify-content: flex-end;
   gap: 8px;
 }
+/* On a narrow or touch panel the confirmation is a bottom sheet, like the host's dialogs. */
+.cv-narrow .cv-modal {
+  align-items: flex-end;
+}
+.cv-narrow .cv-dialog {
+  width: 100%;
+  max-width: none;
+  border-radius: 12px 12px 0 0;
+  padding-bottom: max(24px, env(safe-area-inset-bottom));
+}
 .cv-outline,
 .cv-danger {
   height: 32px;

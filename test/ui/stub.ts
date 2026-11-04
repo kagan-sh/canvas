@@ -14,6 +14,9 @@ const redo = new Map<string, Doc[]>();
 const pngParts: { index: number; last: boolean; data: string }[] = [];
 const sent: { name: string; threadId: string; note: string }[] = [];
 const corrupt = new Set<string>();
+const holds = new Map<string, number>();
+const failures = new Map<string, string>();
+const held: Request[] = [];
 const calls: string[] = [];
 const THREADS = [
   { id: "thr_here", title: "This thread", status: "idle" },
@@ -45,6 +48,18 @@ function handle(request: Request) {
   try {
     // A corrupted answer for a call the test asked to break: a value that does not fit the protocol.
     if (corrupt.delete(request.call)) return ok(id, { names: "oops" });
+    // A held call lets the test decide when its answer arrives, so it can arrive after a newer one.
+    const holding = holds.get(request.call) ?? 0;
+    if (holding > 0) {
+      holds.set(request.call, holding - 1);
+      held.push(request);
+      return;
+    }
+    const failed = failures.get(request.call);
+    if (failed !== undefined) {
+      failures.delete(request.call);
+      return fail(id, failed);
+    }
     switch (request.call) {
       case "open": {
         const name: string = request.name ?? "Main";
@@ -124,6 +139,17 @@ Object.assign(window, {
   kaganStub: {
     corruptNext(call: string) {
       corrupt.add(call);
+    },
+    holdNext(call: string) {
+      holds.set(call, (holds.get(call) ?? 0) + 1);
+    },
+    heldCount: () => held.length,
+    releaseHeld() {
+      const request = held.shift();
+      if (request !== undefined) handle(request);
+    },
+    failNext(call: string, error: string) {
+      failures.set(call, error);
     },
     calls: () => [...calls],
     clearCalls() {

@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { parseRequest } from "./bridge.ts";
-import { pluginMessageSchema, valueSchemas } from "./protocol.ts";
+import { pluginMessageSchema, valueSchemas } from "../protocol.ts";
 import { PngUploads } from "./upload.ts";
 
 test("a missing message is refused and has no id to answer", () => {
@@ -45,6 +45,24 @@ test("an in-order picture joins its pieces on the last one, and a repeat index i
   assert.equal(uploads.accept("u", 1, true, "REVG"), "QUJDREVG");
   // The upload finished, so a new piece 1 under the same id is out of order: a new upload must begin at 0.
   assert.throws(() => uploads.accept("u", 1, true, "REVG"), /expected piece 0, got 1/);
+});
+
+test("an abandoned picture transfer is forgotten, and only a few are kept", () => {
+  let now = 0;
+  const uploads = new PngUploads(() => now);
+  assert.equal(uploads.accept("old", 0, false, "AAAA"), null);
+  now += 60_001;
+  assert.throws(() => uploads.accept("old", 1, true, "AAAA"), /expected piece 0, got 1/);
+
+  for (let i = 0; i < 5; i++) assert.equal(uploads.accept(`u${i}`, 0, false, "AAAA"), null);
+  // A continuation keeps its slot: only a new upload makes room.
+  const full = new PngUploads();
+  for (const name of ["a", "b", "c", "d"]) assert.equal(full.accept(name, 0, false, "AAAA"), null);
+  assert.equal(full.accept("a", 1, true, "BBBB"), "AAAABBBB");
+
+  const bounded = new PngUploads();
+  for (let i = 0; i < 5; i++) assert.equal(bounded.accept(`u${i}`, 0, false, "AAAA"), null);
+  assert.throws(() => bounded.accept("u0", 1, true, "AAAA"), /expected piece 0, got 1/);
 });
 
 test("a plugin message with an extra field, or a push with a wrong type, is refused", () => {

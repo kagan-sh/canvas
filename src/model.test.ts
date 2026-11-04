@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { applyOps, arrowEnds, emptyDoc, exportText, layoutNotes, layoutReport, type Arrow } from "./model.ts";
+import { arrowEnds, arrowLabelRect, contentBounds, exportText, layoutNotes, layoutReport } from "./diagram.ts";
+import { applyOps, emptyDoc, type Arrow } from "./model.ts";
 
 test("ids increase and are never reused; deleting a box deletes its arrows", () => {
   const first = applyOps(emptyDoc("t"), [
@@ -111,6 +112,17 @@ test("a long box label stays the authored size and reports clipped", () => {
   if (box?.type !== "box") return;
   assert.equal(box.h, 50);
   assert.match(layoutReport(layoutNotes(doc)), /b1 label clipped/);
+});
+
+test("the content bounds include an arrow label that reaches wider than the line", () => {
+  const { doc } = applyOps(emptyDoc("t"), [
+    { op: "add", element: { type: "arrow", x1: 0, y1: 0, x2: 0, y2: 300, label: "a wide arrow label" } },
+  ]);
+  const label = arrowLabelRect(doc.elements[0] as Arrow, doc.elements);
+  assert.ok(label !== null);
+  const bounds = contentBounds(doc);
+  assert.ok(bounds !== null);
+  assert.ok(bounds.x <= label.x && bounds.x + bounds.w >= label.x + label.w);
 });
 
 test("no element ever carries an undefined value: the rpc boundary refuses one", () => {

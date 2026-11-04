@@ -10,9 +10,12 @@ import * as esbuild from "esbuild";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const uiDir = path.join(root, "ui");
-const shotDir = process.env.CANVAS_UI_SHOTS ?? "/Users/aorumbayev/projects/kagan-sh/kagan/.plans/web-port";
-const playwrightPath = process.env.CANVAS_UI_PLAYWRIGHT ?? "/tmp/canvas-ui-harness/node_modules/playwright/index.mjs";
-const { chromium } = await import(pathToFileURL(playwrightPath).href);
+const shotDir = process.env.CANVAS_UI_SHOTS ?? path.join(root, "test/ui/screenshots");
+const playwrightPath = process.env.CANVAS_UI_PLAYWRIGHT ?? "playwright";
+const playwright = await import(playwrightPath.startsWith("/") ? pathToFileURL(playwrightPath).href : playwrightPath).catch((error) => {
+  throw new Error(`This harness needs Playwright. Run "npm i -D playwright", or set CANVAS_UI_PLAYWRIGHT to its index.mjs. (${error.message})`);
+});
+const { chromium } = playwright;
 
 const CSP =
   "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'";
@@ -83,11 +86,14 @@ async function openPage(browser, theme, { pushContext = true, coarse = false, se
   // A reopened panel gets no push: the page must ask for the thread on screen itself.
   if (pushContext) await page.evaluate(() => window.dispatchEvent(new CustomEvent("kagan", { detail: { push: "context", threadId: "thr_here", projectId: "p1" } })));
   await page.waitForSelector("svg.cv-svg");
-  await page.waitForTimeout(150);
+  await page.waitForFunction(() => (document.querySelector(".cv-name")?.textContent ?? "").length > 0);
+  await frames(page);
   return { server, context, page, problems, fonts, headers };
 }
 
 const boxCount = (page) => page.locator("svg.cv-svg [data-id]").count();
+/** Two frames: layout and the ResizeObserver that follows it have both run. */
+const frames = (page) => page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
 const pressed = (page) => page.evaluate(() => [...document.querySelectorAll(".cv-toolbar [aria-pressed='true']")].map((b) => b.getAttribute("aria-label")));
 const zoomLabel = (page) => page.locator(".cv-zoom").innerText();
 async function drag(page, from, to) {
@@ -100,7 +106,9 @@ async function drag(page, from, to) {
 // next is not undone by the late confirmation.
 async function waitCount(page, n) {
   await page.waitForFunction((count) => document.querySelectorAll("svg.cv-svg [data-id]").length === count, n, { timeout: 4000 });
-  await page.waitForTimeout(250);
+  // A draw returns to Select only after the plugin confirmed it and assigned the new id.
+  await page.waitForFunction(() => document.querySelector("[aria-label='Selection']")?.getAttribute("aria-pressed") === "true");
+  await frames(page);
 }
 const BOX_A = { from: { x: 300, y: 250 }, to: { x: 420, y: 330 } };
 const BOX_B = { from: { x: 600, y: 250 }, to: { x: 720, y: 330 } };
@@ -124,6 +132,7 @@ async function drawDiagram(page) {
   await waitCount(page, 3);
   await page.keyboard.press("Enter");
   await page.waitForSelector("textarea.cv-editor");
+  await page.waitForFunction(() => document.activeElement?.classList.contains("cv-editor"));
   await page.keyboard.type("yes");
   await page.keyboard.press("Escape");
   await page.waitForFunction(() => [...document.querySelectorAll("svg.cv-svg text")].some((t) => t.textContent === "yes"));
@@ -196,7 +205,12 @@ async function functional(browser) {
     });
     const xBefore = await lastX();
     await page.keyboard.press("ArrowRight");
-    await page.waitForTimeout(250);
+    await page.waitForFunction((before) => {
+      const boxes = [...document.querySelectorAll("svg.cv-svg g[data-id][transform]")];
+      const match = /translate\(([-\d.]+)/.exec(boxes.at(-1).getAttribute("transform"));
+      return Number(match[1]) !== before;
+    }, xBefore);
+    await frames(page);
     const xAfter = await lastX();
     check("b. arrow keys nudge the selection by 1", xAfter - xBefore === 1, `${xBefore}→${xAfter}`);
     await page.keyboard.press("Delete");
@@ -260,7 +274,7 @@ async function bridge(browser) {
     check("j. a reply that does not fit the protocol fails its call with a message", refused);
     await page.evaluate(() => window.kaganStub.clearCalls());
     await page.evaluate(() => window.kaganStub.push({ push: "changed", name: 5, rev: "x" }));
-    await page.waitForTimeout(300);
+    await frames(page);
     const after = await page.evaluate(() => window.kaganStub.calls());
     check("j. a push that does not fit causes no call", after.length === 0, JSON.stringify(after));
     check("j. malformed replies and pushes cause no page errors", problems.length === 0, problems.join(" | ").slice(0, 300));
@@ -290,14 +304,15 @@ async function panel(browser) {
     try {
       // Wait for the empty canvas to load first, so the first fit has happened before the agent edits.
       await page.waitForSelector(".cv-empty-line");
-      await page.waitForTimeout(200);
+      await frames(page);
       // The person pans away first. Then the agent's work lands far outside the view, and the page must bring it back.
       await page.mouse.move(600, 400);
       await page.mouse.wheel(0, 300);
-      await page.waitForTimeout(200);
+      await frames(page);
       await page.evaluate(() => window.kaganStub.agentEdit("Main", [{ op: "add", element: { type: "box", x: 4000, y: 3000, w: 160, h: 80, label: "agent" } }]));
       await page.waitForFunction(() => document.querySelectorAll("svg.cv-svg [data-id]").length === 1, null, { timeout: 4000 });
-      await page.waitForTimeout(250);
+      await frames(page);
+      await frames(page);
       const inside = await page.evaluate(() => {
         const frame = document.querySelector("svg.cv-svg").getBoundingClientRect();
         const box = document.querySelector("svg.cv-svg [data-id]").getBoundingClientRect();
@@ -314,7 +329,7 @@ async function panel(browser) {
     const { server, context, page, problems } = await openPage(browser, "light");
     try {
       await page.setViewportSize({ width: 360, height: 760 });
-      await page.waitForTimeout(300);
+      await frames(page);
       const line = await page.locator(".cv-empty-line").first().innerText();
       check("i. the empty canvas names ⌘ and no longer says pinch", line.includes("⌘") && !/pinch/i.test(line), line);
       check("i. the empty-state copy has no console errors", problems.length === 0, problems.join(" | ").slice(0, 300));
@@ -338,6 +353,43 @@ const view = (page) =>
     return { x: Math.round(x * 100) / 100, y: Math.round(y * 100) / 100, scale: Math.round((frame.width / w) * 1000) / 1000, zoom: document.querySelector(".cv-zoom")?.innerText ?? "", frameH: Math.round(frame.height), topH: Math.round(document.querySelector(".cv-top")?.getBoundingClientRect().height ?? 0), dockH: Math.round(document.querySelector(".cv-dock")?.getBoundingClientRect().height ?? 0) };
   });
 
+async function reconciliation(browser) {
+  const seed = {
+    Main: [{ op: "add", element: { type: "box", x: 300, y: 200, w: 160, h: 80, label: "main" } }],
+    A: [{ op: "add", element: { type: "box", x: 300, y: 200, w: 160, h: 80, label: "A" } }],
+    B: [{ op: "add", element: { type: "box", x: 300, y: 200, w: 160, h: 80, label: "B" } }],
+  };
+  const { server, context, page, problems } = await openPage(browser, "light", { seed });
+  try {
+    // Hold A's open answer, pick B, then let A's older answer arrive.
+    await page.evaluate(() => window.kaganStub.holdNext("open"));
+    await page.locator("[aria-label='Main menu']").click();
+    await page.getByRole("menuitem", { name: "A", exact: true }).click();
+    await page.waitForFunction(() => window.kaganStub.heldCount() === 1);
+    await page.locator("[aria-label='Main menu']").click();
+    await page.getByRole("menuitem", { name: "B", exact: true }).click();
+    await page.waitForFunction(() => document.querySelector(".cv-name")?.textContent === "B");
+    await page.evaluate(() => window.kaganStub.releaseHeld());
+    await frames(page);
+    const name = await page.evaluate(() => document.querySelector(".cv-name")?.textContent);
+    check("h. a late answer for the previous canvas does not replace the current one", name === "B", name ?? "no name");
+
+    // A failed save shows why, and the page reloads the canvas the plugin really kept.
+    await page.evaluate(() => window.kaganStub.failNext("apply", "disk full"));
+    await page.mouse.click(800, 500);
+    await page.keyboard.press("r");
+    await drag(page, { x: 500, y: 450 }, { x: 620, y: 530 });
+    await page.waitForFunction(() => document.querySelector(".cv-toast-error")?.textContent?.includes("disk full"), null, { timeout: 4000 });
+    await page.waitForFunction(() => document.querySelectorAll("svg.cv-svg [data-id]").length === 1, null, { timeout: 4000 });
+    const error = await page.locator(".cv-toast-error").innerText();
+    check("h. a failed save says why and the canvas returns to what the plugin kept", /Couldn't save the canvas/.test(error) && /disk full/.test(error), error);
+    check("h. reconciliation has no console errors", problems.length === 0, problems.join(" | ").slice(0, 300));
+  } finally {
+    await context.close();
+    server.close();
+  }
+}
+
 async function sizing(browser) {
   {
     const { server, context, page, problems } = await openPage(browser, "light");
@@ -345,7 +397,8 @@ async function sizing(browser) {
       await page.waitForSelector(".cv-send select");
       const wide = await chrome(page);
       await page.setViewportSize({ width: 600, height: 760 });
-      await page.waitForTimeout(300);
+      await frames(page);
+      await frames(page);
       const narrow = await chrome(page);
       check("a. a 600 px panel with a mouse keeps the desktop control sizes", JSON.stringify(narrow) === JSON.stringify(wide), `wide ${JSON.stringify(wide)} · 600 px ${JSON.stringify(narrow)}`);
       check("a. the 600 px mouse panel has no console errors", problems.length === 0, problems.join(" | ").slice(0, 300));
@@ -360,7 +413,8 @@ async function sizing(browser) {
       const coarse = await page.evaluate(() => window.matchMedia("(pointer: coarse)").matches);
       check("b. the touch test really reports a coarse pointer", coarse);
       await page.setViewportSize({ width: 600, height: 760 });
-      await page.waitForTimeout(300);
+      await frames(page);
+      await frames(page);
       const touch = await chrome(page);
       check("b. a touch screen in a 600 px panel gets the big targets", touch.tool === 44 && touch.field === 40 && touch.select === 40, JSON.stringify(touch));
       check("b. the touch panel has no console errors", problems.length === 0, problems.join(" | ").slice(0, 300));
@@ -373,16 +427,28 @@ async function sizing(browser) {
 
 const sameView = (a, b) => a.x === b.x && a.y === b.y && a.scale === b.scale && a.zoom === b.zoom;
 
+/** Waits until the panel's frame and fit stop changing, so a snapshot is not taken mid-settle. */
+async function stableView(page) {
+  let last = await view(page);
+  for (let i = 0; i < 20; i++) {
+    await frames(page);
+    const next = await view(page);
+    if (sameView(last, next)) return next;
+    last = next;
+  }
+  return last;
+}
+
 async function narrowDraw(browser, { coarse = false } = {}) {
   const where = coarse ? "600 px touch panel" : "600 px panel";
   const { server, context, page, problems } = await openPage(browser, "light", { coarse });
   try {
     await page.setViewportSize({ width: 600, height: 760 });
     await page.waitForSelector(".cv-empty-line");
-    await page.waitForTimeout(300);
+    await frames(page);
     await page.mouse.click(300, 300); // empty canvas: focus the page, clear selection
     await page.keyboard.press("r");
-    await page.waitForTimeout(300);
+    await frames(page);
     const before = await view(page);
     await page.screenshot({ path: path.join(shotDir, `narrow-600-before-draw${coarse ? "-touch" : ""}.png`) });
     await page.evaluate(() => {
@@ -402,7 +468,7 @@ async function narrowDraw(browser, { coarse = false } = {}) {
     check("k. the page does not refetch its own box", !calls.includes("open") && !calls.includes("list"), calls.join(","));
     // An arrow selects a row of options a box does not have, so the dock grows once the arrow is drawn.
     await page.keyboard.press("a");
-    await page.waitForTimeout(200);
+    await frames(page);
     const beforeArrow = await view(page);
     await page.evaluate(() => {
       window.kaganStub.clearCalls();
@@ -429,8 +495,7 @@ async function savedDrag(browser, width) {
       const state = await page.evaluate(() => ({ count: document.querySelectorAll("svg.cv-svg [data-id]").length, svg: document.querySelector("svg.cv-svg")?.innerHTML.slice(0, 300) ?? null, calls: window.kaganStub?.calls() ?? null }));
       throw new Error(`seeded box not shown: ${JSON.stringify(state).slice(0, 600)} ${problems.join(" | ").slice(0, 300)} ${error.message.slice(0, 80)}`);
     });
-    await page.waitForTimeout(400);
-    const before = await view(page);
+    const before = await stableView(page);
     const onScreen = await page.evaluate(() => {
       const frame = document.querySelector("svg.cv-svg").getBoundingClientRect();
       const box = document.querySelector("svg.cv-svg [data-id]").getBoundingClientRect();
@@ -445,8 +510,7 @@ async function savedDrag(browser, width) {
     });
     await page.evaluate(() => window.kaganStub.clearCalls());
     await drag(page, { x: grab.x, y: grab.y }, { x: grab.x + 60, y: grab.y });
-    await page.waitForTimeout(400);
-    const after = await view(page);
+    const after = await stableView(page);
     const calls = await page.evaluate(() => window.kaganStub.calls());
     check(`k. dragging a saved box in a ${width} px panel does not move the view`, grab.onBox && sameView(before, after), `pressed on box ${grab.onBox} · before ${JSON.stringify(before)} · after ${JSON.stringify(after)} · calls ${calls.join(",")}`);
     check(`k. the saved-box drag in a ${width} px panel has no console errors`, problems.length === 0, problems.join(" | ").slice(0, 300));
@@ -461,18 +525,17 @@ async function undoDraw(browser) {
   try {
     await page.setViewportSize({ width: 600, height: 760 });
     await page.waitForSelector(".cv-empty-line");
-    await page.waitForTimeout(300);
+    await frames(page);
     await page.mouse.click(300, 300);
     await page.keyboard.press("r");
-    await page.waitForTimeout(300);
+    await frames(page);
     await drag(page, { x: 150, y: 220 }, { x: 260, y: 300 });
     await waitCount(page, 1);
     const before = await view(page);
     await page.evaluate(() => window.kaganStub.clearCalls());
     await page.locator("[aria-label='Undo']").click();
     await page.waitForFunction(() => document.querySelectorAll("svg.cv-svg [data-id]").length === 0, null, { timeout: 4000 });
-    await page.waitForTimeout(300);
-    const after = await view(page);
+    const after = await stableView(page);
     const calls = await page.evaluate(() => window.kaganStub.calls());
     check("k. undoing a box in a 600 px panel does not move the view", sameView(before, after), `before ${JSON.stringify(before)} · after ${JSON.stringify(after)} · calls ${calls.join(",")}`);
     check("k. undo asks the plugin once and does not refetch", calls.join(",") === "undo", calls.join(","));
@@ -505,6 +568,7 @@ const browser = await chromium.launch();
 try {
   await functional(browser);
   await panel(browser);
+  await reconciliation(browser);
   await sizing(browser);
   await narrowDraw(browser);
   await narrowDraw(browser, { coarse: true });

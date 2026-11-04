@@ -59,16 +59,11 @@ export const valueSchemas = {
   context: z.strictObject({ threadId: z.string().nullable(), projectId: z.string().nullable() }),
   threads: z.strictObject({ threads: z.array(threadRow) }),
   apply: z.strictObject({ doc, added: z.array(z.string()) }),
-  undo: z.union([doc, z.strictObject({ doc })]),
-  redo: z.union([doc, z.strictObject({ doc })]),
+  undo: z.strictObject({ doc }),
+  redo: z.strictObject({ doc }),
   delete: z.strictObject({ names: z.array(z.string()) }),
   send: z.strictObject({ sent: z.literal(true) }),
   pngChunk: z.strictObject({}),
 } as const;
 
-export type OpenValue = z.infer<typeof valueSchemas.open>;
-export type ApplyValue = z.infer<typeof valueSchemas.apply>;
-export type ListValue = z.infer<typeof valueSchemas.list>;
-export type ContextValue = z.infer<typeof valueSchemas.context>;
-export type ThreadsValue = z.infer<typeof valueSchemas.threads>;
 export type ThreadRow = z.infer<typeof threadRow>;

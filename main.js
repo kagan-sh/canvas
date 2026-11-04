@@ -9,7 +9,13 @@ import { View } from "gpui-kit";
 import { fail, next, reply } from "kagan/jobs";
 import { post } from "kagan/panel";
 import { context, log, onContextChanged, openPanel, pasteIntoThread, writeClipboardPng } from "kagan/host";
-import { get, list, project } from "kagan/threads";
+import { migrate, query, transaction } from "kagan/database";
+import { get, list, project, projects } from "kagan/threads";
+
+// src/errors.ts
+function errorMessage(cause) {
+  return cause instanceof Error ? cause.message : String(cause);
+}
 
 // node_modules/zod/v4/classic/external.js
 var external_exports = {};
@@ -725,8 +731,8 @@ function cleanRegex(source) {
   const end = source.endsWith("$") ? source.length - 1 : source.length;
   return source.slice(start, end);
 }
-function floatSafeRemainder(val, step2) {
-  const ratio = val / step2;
+function floatSafeRemainder(val, step) {
+  const ratio = val / step;
   const roundedRatio = Math.round(ratio);
   const tolerance = 4 * Number.EPSILON * Math.max(Math.abs(ratio), 1);
   if (Math.abs(ratio - roundedRatio) < tolerance)
@@ -15658,13 +15664,13 @@ function initializeContext(params) {
     external: params?.external ?? void 0
   };
 }
-function handleUnrepresentable(schema, ctx, json2, params, message) {
+function handleUnrepresentable(schema, ctx, json3, params, message) {
   const result = typeof ctx.unrepresentable === "function" ? ctx.unrepresentable({ zodSchema: schema, path: params.path, message }) : ctx.unrepresentable;
   if (result === "any")
     return false;
   if (result === void 0 || result === "throw")
     throw new Error(message);
-  Object.assign(json2, result);
+  Object.assign(json3, result);
   return true;
 }
 function processSchema(schema, ctx, _params = { path: [], schemaPath: [] }) {
@@ -15900,12 +15906,12 @@ function foldObjects(members2) {
   }
   return folded;
 }
-function foldIntersection(json2) {
-  const allOf = json2.allOf;
+function foldIntersection(json3) {
+  const allOf = json3.allOf;
   if (!Array.isArray(allOf) || allOf.length < 2)
     return;
   for (const key of FOLDABLE_KEYS)
-    if (key in json2)
+    if (key in json3)
       return;
   const unions = allOf.filter((m) => UNION_KEYS.some((k) => Array.isArray(m[k])));
   let folded = null;
@@ -15924,8 +15930,8 @@ function foldIntersection(json2) {
   }
   if (!folded)
     return;
-  delete json2.allOf;
-  assignProps(json2, folded);
+  delete json3.allOf;
+  assignProps(json3, folded);
 }
 function finalize(ctx, schema) {
   const root = ctx.seen.get(schema);
@@ -16007,20 +16013,20 @@ function finalize(ctx, schema) {
     if (ctx.intersections.length) {
       const carriers = /* @__PURE__ */ new Map();
       for (const seen of ctx.seen.values()) {
-        for (const json2 of [seen.schema, seen.def]) {
-          const allOf = json2?.allOf;
+        for (const json3 of [seen.schema, seen.def]) {
+          const allOf = json3?.allOf;
           if (!Array.isArray(allOf))
             continue;
           const existing = carriers.get(allOf);
           if (existing)
-            existing.push(json2);
+            existing.push(json3);
           else
-            carriers.set(allOf, [json2]);
+            carriers.set(allOf, [json3]);
         }
       }
       for (const allOf of ctx.intersections) {
-        for (const json2 of carriers.get(allOf) ?? [])
-          foldIntersection(json2);
+        for (const json3 of carriers.get(allOf) ?? [])
+          foldIntersection(json3);
       }
     }
   }
@@ -16255,29 +16261,29 @@ var exactPatterns = /* @__PURE__ */ new Map([
 ]);
 var exactPattern = (p) => exactPatterns.get(p) ?? p;
 var stringProcessor = (schema, ctx, _json, _params) => {
-  const json2 = _json;
-  json2.type = "string";
+  const json3 = _json;
+  json3.type = "string";
   const { minimum, maximum, format, patterns, contentEncoding, laxFormat } = aggregateChecks(schema);
   if (typeof minimum === "number")
-    json2.minLength = minimum;
+    json3.minLength = minimum;
   if (typeof maximum === "number")
-    json2.maxLength = maximum;
+    json3.maxLength = maximum;
   if (format) {
-    json2.format = formatMap[format] ?? format;
-    if (json2.format === "")
-      delete json2.format;
+    json3.format = formatMap[format] ?? format;
+    if (json3.format === "")
+      delete json3.format;
     if (format === "time" || laxFormat) {
-      delete json2.format;
+      delete json3.format;
     }
   }
   if (contentEncoding)
-    json2.contentEncoding = contentEncoding;
+    json3.contentEncoding = contentEncoding;
   if (patterns && patterns.size > 0) {
     const patternList = [...patterns].map(exactPattern);
     if (patternList.length === 1)
-      json2.pattern = patternList[0].source;
+      json3.pattern = patternList[0].source;
     else if (patternList.length > 1) {
-      json2.allOf = [
+      json3.allOf = [
         ...patternList.map((regex) => ({
           ...ctx.target === "draft-07" || ctx.target === "draft-04" || ctx.target === "openapi-3.0" ? { type: "string" } : {},
           pattern: regex.source
@@ -16287,31 +16293,31 @@ var stringProcessor = (schema, ctx, _json, _params) => {
   }
 };
 var numberProcessor = (schema, ctx, _json, params) => {
-  const json2 = _json;
+  const json3 = _json;
   const { minimum, maximum, multipleOf, exclusiveMaximum, exclusiveMinimum, isInt } = aggregateChecks(schema);
-  json2.type = isInt ? "integer" : "number";
+  json3.type = isInt ? "integer" : "number";
   const exMin = typeof exclusiveMinimum === "number" && exclusiveMinimum >= (minimum ?? Number.NEGATIVE_INFINITY);
   const exMax = typeof exclusiveMaximum === "number" && exclusiveMaximum <= (maximum ?? Number.POSITIVE_INFINITY);
   const legacy = ctx.target === "draft-04" || ctx.target === "openapi-3.0";
   if (exMin) {
     if (legacy) {
-      json2.minimum = exclusiveMinimum;
-      json2.exclusiveMinimum = true;
+      json3.minimum = exclusiveMinimum;
+      json3.exclusiveMinimum = true;
     } else {
-      json2.exclusiveMinimum = exclusiveMinimum;
+      json3.exclusiveMinimum = exclusiveMinimum;
     }
   } else if (typeof minimum === "number") {
-    json2.minimum = minimum;
+    json3.minimum = minimum;
   }
   if (exMax) {
     if (legacy) {
-      json2.maximum = exclusiveMaximum;
-      json2.exclusiveMaximum = true;
+      json3.maximum = exclusiveMaximum;
+      json3.exclusiveMaximum = true;
     } else {
-      json2.exclusiveMaximum = exclusiveMaximum;
+      json3.exclusiveMaximum = exclusiveMaximum;
     }
   } else if (typeof maximum === "number") {
-    json2.maximum = maximum;
+    json3.maximum = maximum;
   }
   if (multipleOf) {
     const divisors = /* @__PURE__ */ new Set();
@@ -16319,75 +16325,75 @@ var numberProcessor = (schema, ctx, _json, params) => {
       if (Number.isFinite(divisor) && divisor !== 0)
         divisors.add(Math.abs(divisor));
       else
-        handleUnrepresentable(schema, ctx, json2, params, `A multipleOf divisor of ${divisor} cannot be represented in JSON Schema`);
+        handleUnrepresentable(schema, ctx, json3, params, `A multipleOf divisor of ${divisor} cannot be represented in JSON Schema`);
     }
     const [first, ...rest] = divisors;
     if (first !== void 0)
-      json2.multipleOf = first;
+      json3.multipleOf = first;
     if (rest.length)
-      json2.allOf = [...json2.allOf ?? [], ...rest.map((m) => ({ multipleOf: m }))];
+      json3.allOf = [...json3.allOf ?? [], ...rest.map((m) => ({ multipleOf: m }))];
   }
 };
-var booleanProcessor = (_schema, _ctx, json2, _params) => {
-  json2.type = "boolean";
+var booleanProcessor = (_schema, _ctx, json3, _params) => {
+  json3.type = "boolean";
 };
-var bigintProcessor = (schema, ctx, json2, params) => {
-  handleUnrepresentable(schema, ctx, json2, params, "BigInt cannot be represented in JSON Schema");
+var bigintProcessor = (schema, ctx, json3, params) => {
+  handleUnrepresentable(schema, ctx, json3, params, "BigInt cannot be represented in JSON Schema");
 };
-var symbolProcessor = (schema, ctx, json2, params) => {
-  handleUnrepresentable(schema, ctx, json2, params, "Symbols cannot be represented in JSON Schema");
+var symbolProcessor = (schema, ctx, json3, params) => {
+  handleUnrepresentable(schema, ctx, json3, params, "Symbols cannot be represented in JSON Schema");
 };
-var nullProcessor = (_schema, ctx, json2, _params) => {
+var nullProcessor = (_schema, ctx, json3, _params) => {
   if (ctx.target === "openapi-3.0") {
-    json2.type = "string";
-    json2.nullable = true;
-    json2.enum = [null];
+    json3.type = "string";
+    json3.nullable = true;
+    json3.enum = [null];
   } else {
-    json2.type = "null";
+    json3.type = "null";
   }
 };
-var undefinedProcessor = (schema, ctx, json2, params) => {
-  handleUnrepresentable(schema, ctx, json2, params, "Undefined cannot be represented in JSON Schema");
+var undefinedProcessor = (schema, ctx, json3, params) => {
+  handleUnrepresentable(schema, ctx, json3, params, "Undefined cannot be represented in JSON Schema");
 };
-var voidProcessor = (schema, ctx, json2, params) => {
-  handleUnrepresentable(schema, ctx, json2, params, "Void cannot be represented in JSON Schema");
+var voidProcessor = (schema, ctx, json3, params) => {
+  handleUnrepresentable(schema, ctx, json3, params, "Void cannot be represented in JSON Schema");
 };
-var neverProcessor = (_schema, _ctx, json2, _params) => {
-  json2.not = {};
+var neverProcessor = (_schema, _ctx, json3, _params) => {
+  json3.not = {};
 };
 var anyProcessor = (_schema, _ctx, _json, _params) => {
 };
 var unknownProcessor = (_schema, _ctx, _json, _params) => {
 };
-var dateProcessor = (schema, ctx, json2, params) => {
-  handleUnrepresentable(schema, ctx, json2, params, "Date cannot be represented in JSON Schema");
+var dateProcessor = (schema, ctx, json3, params) => {
+  handleUnrepresentable(schema, ctx, json3, params, "Date cannot be represented in JSON Schema");
 };
-var enumProcessor = (schema, _ctx, json2, _params) => {
+var enumProcessor = (schema, _ctx, json3, _params) => {
   const def = schema._zod.def;
   const values = getEnumValues(def.entries);
   if (values.length === 0) {
-    json2.not = {};
+    json3.not = {};
     return;
   }
   if (values.every((v) => typeof v === "number"))
-    json2.type = "number";
+    json3.type = "number";
   if (values.every((v) => typeof v === "string"))
-    json2.type = "string";
-  json2.enum = values;
+    json3.type = "string";
+  json3.enum = values;
 };
-var literalProcessor = (schema, ctx, json2, params) => {
+var literalProcessor = (schema, ctx, json3, params) => {
   const def = schema._zod.def;
   if (def.values.length === 0) {
-    json2.not = {};
+    json3.not = {};
     return;
   }
   const vals = [];
   for (const val of def.values) {
     if (val === void 0) {
-      if (handleUnrepresentable(schema, ctx, json2, params, "Literal `undefined` cannot be represented in JSON Schema"))
+      if (handleUnrepresentable(schema, ctx, json3, params, "Literal `undefined` cannot be represented in JSON Schema"))
         return;
     } else if (typeof val === "bigint") {
-      if (handleUnrepresentable(schema, ctx, json2, params, "BigInt literals cannot be represented in JSON Schema"))
+      if (handleUnrepresentable(schema, ctx, json3, params, "BigInt literals cannot be represented in JSON Schema"))
         return;
       vals.push(Number(val));
     } else {
@@ -16397,37 +16403,37 @@ var literalProcessor = (schema, ctx, json2, params) => {
   if (vals.length === 0) {
   } else if (vals.length === 1) {
     const val = vals[0];
-    json2.type = val === null ? "null" : typeof val;
+    json3.type = val === null ? "null" : typeof val;
     if (ctx.target === "draft-04" || ctx.target === "openapi-3.0") {
-      json2.enum = [val];
+      json3.enum = [val];
     } else {
-      json2.const = val;
+      json3.const = val;
     }
   } else {
     if (vals.every((v) => typeof v === "number"))
-      json2.type = "number";
+      json3.type = "number";
     if (vals.every((v) => typeof v === "string"))
-      json2.type = "string";
+      json3.type = "string";
     if (vals.every((v) => typeof v === "boolean"))
-      json2.type = "boolean";
+      json3.type = "boolean";
     if (vals.every((v) => v === null))
-      json2.type = "null";
-    json2.enum = vals;
+      json3.type = "null";
+    json3.enum = vals;
   }
 };
-var nanProcessor = (schema, ctx, json2, params) => {
-  handleUnrepresentable(schema, ctx, json2, params, "NaN cannot be represented in JSON Schema");
+var nanProcessor = (schema, ctx, json3, params) => {
+  handleUnrepresentable(schema, ctx, json3, params, "NaN cannot be represented in JSON Schema");
 };
-var templateLiteralProcessor = (schema, _ctx, json2, _params) => {
-  const _json = json2;
+var templateLiteralProcessor = (schema, _ctx, json3, _params) => {
+  const _json = json3;
   const pattern = schema._zod.pattern;
   if (!pattern)
     throw new Error("Pattern not found in template literal");
   _json.type = "string";
   _json.pattern = pattern.source;
 };
-var fileProcessor = (schema, _ctx, json2, _params) => {
-  const _json = json2;
+var fileProcessor = (schema, _ctx, json3, _params) => {
+  const _json = json3;
   _json.type = "string";
   _json.format = "binary";
   _json.contentEncoding = "binary";
@@ -16445,34 +16451,34 @@ var fileProcessor = (schema, _ctx, json2, _params) => {
   else
     _json.anyOf = mime.map((m) => ({ contentMediaType: m }));
 };
-var successProcessor = (_schema, _ctx, json2, _params) => {
-  json2.type = "boolean";
+var successProcessor = (_schema, _ctx, json3, _params) => {
+  json3.type = "boolean";
 };
-var customProcessor = (schema, ctx, json2, params) => {
-  handleUnrepresentable(schema, ctx, json2, params, "Custom types cannot be represented in JSON Schema");
+var customProcessor = (schema, ctx, json3, params) => {
+  handleUnrepresentable(schema, ctx, json3, params, "Custom types cannot be represented in JSON Schema");
 };
-var functionProcessor = (schema, ctx, json2, params) => {
-  handleUnrepresentable(schema, ctx, json2, params, "Function types cannot be represented in JSON Schema");
+var functionProcessor = (schema, ctx, json3, params) => {
+  handleUnrepresentable(schema, ctx, json3, params, "Function types cannot be represented in JSON Schema");
 };
-var transformProcessor = (schema, ctx, json2, params) => {
-  handleUnrepresentable(schema, ctx, json2, params, "Transforms cannot be represented in JSON Schema");
+var transformProcessor = (schema, ctx, json3, params) => {
+  handleUnrepresentable(schema, ctx, json3, params, "Transforms cannot be represented in JSON Schema");
 };
-var mapProcessor = (schema, ctx, json2, params) => {
-  handleUnrepresentable(schema, ctx, json2, params, "Map cannot be represented in JSON Schema");
+var mapProcessor = (schema, ctx, json3, params) => {
+  handleUnrepresentable(schema, ctx, json3, params, "Map cannot be represented in JSON Schema");
 };
-var setProcessor = (schema, ctx, json2, params) => {
-  handleUnrepresentable(schema, ctx, json2, params, "Set cannot be represented in JSON Schema");
+var setProcessor = (schema, ctx, json3, params) => {
+  handleUnrepresentable(schema, ctx, json3, params, "Set cannot be represented in JSON Schema");
 };
 var arrayProcessor = (schema, ctx, _json, params) => {
-  const json2 = _json;
+  const json3 = _json;
   const def = schema._zod.def;
   const { minimum, maximum } = aggregateChecks(schema);
   if (typeof minimum === "number")
-    json2.minItems = minimum;
+    json3.minItems = minimum;
   if (typeof maximum === "number")
-    json2.maxItems = maximum;
-  json2.type = "array";
-  json2.items = processSchema(def.element, ctx, {
+    json3.maxItems = maximum;
+  json3.type = "array";
+  json3.items = processSchema(def.element, ctx, {
     ...params,
     path: [...params.path, "items"]
   });
@@ -16488,17 +16494,17 @@ function inputOptin(schema) {
   return schema._zod.optin;
 }
 var objectProcessor = (schema, ctx, _json, params) => {
-  const json2 = _json;
+  const json3 = _json;
   const def = schema._zod.def;
   const shape = def.shape;
   const symbolKeys = Object.getOwnPropertySymbols(shape);
-  if (symbolKeys.length && handleUnrepresentable(schema, ctx, json2, params, "Symbol keys cannot be represented in JSON Schema")) {
+  if (symbolKeys.length && handleUnrepresentable(schema, ctx, json3, params, "Symbol keys cannot be represented in JSON Schema")) {
     return;
   }
-  json2.type = "object";
-  json2.properties = {};
+  json3.type = "object";
+  json3.properties = {};
   for (const key in shape) {
-    assignProp(json2.properties, key, processSchema(shape[key], ctx, {
+    assignProp(json3.properties, key, processSchema(shape[key], ctx, {
       ...params,
       path: [...params.path, "properties", key]
     }));
@@ -16511,21 +16517,21 @@ var objectProcessor = (schema, ctx, _json, params) => {
     }
   }
   if (requiredKeys.length > 0) {
-    json2.required = requiredKeys;
+    json3.required = requiredKeys;
   }
   if (def.catchall?._zod.def.type === "never") {
-    json2.additionalProperties = false;
+    json3.additionalProperties = false;
   } else if (!def.catchall) {
     if (ctx.io === "output")
-      json2.additionalProperties = false;
+      json3.additionalProperties = false;
   } else if (def.catchall) {
-    json2.additionalProperties = processSchema(def.catchall, ctx, {
+    json3.additionalProperties = processSchema(def.catchall, ctx, {
       ...params,
       path: [...params.path, "additionalProperties"]
     });
   }
 };
-var unionProcessor = (schema, ctx, json2, params) => {
+var unionProcessor = (schema, ctx, json3, params) => {
   const def = schema._zod.def;
   const isExclusive = def.inclusive === false;
   const options = def.options.map((x, i) => processSchema(x, ctx, {
@@ -16533,12 +16539,12 @@ var unionProcessor = (schema, ctx, json2, params) => {
     path: [...params.path, isExclusive ? "oneOf" : "anyOf", i]
   }));
   if (isExclusive) {
-    json2.oneOf = options;
+    json3.oneOf = options;
   } else {
-    json2.anyOf = options;
+    json3.anyOf = options;
   }
 };
-var intersectionProcessor = (schema, ctx, json2, params) => {
+var intersectionProcessor = (schema, ctx, json3, params) => {
   const def = schema._zod.def;
   const a = processSchema(def.left, ctx, {
     ...params,
@@ -16553,13 +16559,13 @@ var intersectionProcessor = (schema, ctx, json2, params) => {
     ...isSimpleIntersection(a) ? a.allOf : [a],
     ...isSimpleIntersection(b) ? b.allOf : [b]
   ];
-  json2.allOf = allOf;
+  json3.allOf = allOf;
   ctx.intersections.push(allOf);
 };
 var tupleProcessor = (schema, ctx, _json, params) => {
-  const json2 = _json;
+  const json3 = _json;
   const def = schema._zod.def;
-  json2.type = "array";
+  json3.type = "array";
   const prefixPath = ctx.target === "draft-2020-12" ? "prefixItems" : "items";
   const restPath = ctx.target === "draft-2020-12" ? "items" : ctx.target === "openapi-3.0" ? "items" : "additionalItems";
   const prefixItems = def.items.map((x, i) => processSchema(x, ctx, {
@@ -16581,70 +16587,70 @@ var tupleProcessor = (schema, ctx, _json, params) => {
   const maxItems = def.items.length;
   const isClosed = !def.rest;
   if (ctx.target === "draft-2020-12") {
-    json2.prefixItems = prefixItems;
+    json3.prefixItems = prefixItems;
     if (isClosed) {
-      json2.items = false;
+      json3.items = false;
     } else if (rest) {
-      json2.items = rest;
+      json3.items = rest;
     }
     if (minItems > 0)
-      json2.minItems = minItems;
+      json3.minItems = minItems;
     if (isClosed)
-      json2.maxItems = maxItems;
+      json3.maxItems = maxItems;
   } else if (ctx.target === "openapi-3.0") {
-    json2.items = {
+    json3.items = {
       anyOf: prefixItems
     };
     if (rest) {
-      json2.items.anyOf.push(rest);
+      json3.items.anyOf.push(rest);
     }
     if (minItems > 0)
-      json2.minItems = minItems;
+      json3.minItems = minItems;
     if (isClosed)
-      json2.maxItems = maxItems;
+      json3.maxItems = maxItems;
   } else {
-    json2.items = prefixItems;
+    json3.items = prefixItems;
     if (isClosed) {
-      json2.additionalItems = false;
+      json3.additionalItems = false;
     } else if (rest) {
-      json2.additionalItems = rest;
+      json3.additionalItems = rest;
     }
     if (minItems > 0)
-      json2.minItems = minItems;
+      json3.minItems = minItems;
     if (isClosed)
-      json2.maxItems = maxItems;
+      json3.maxItems = maxItems;
   }
   const { minimum, maximum } = aggregateChecks(schema);
   if (typeof minimum === "number")
-    json2.minItems = minimum;
+    json3.minItems = minimum;
   if (typeof maximum === "number")
-    json2.maxItems = maximum;
+    json3.maxItems = maximum;
 };
-function stringifyKeyNames(bySchema, json2, visited) {
-  if (json2.$ref) {
-    if (visited.has(json2))
-      return json2;
-    visited.add(json2);
-    const def = bySchema.get(json2)?.def;
+function stringifyKeyNames(bySchema, json3, visited) {
+  if (json3.$ref) {
+    if (visited.has(json3))
+      return json3;
+    visited.add(json3);
+    const def = bySchema.get(json3)?.def;
     if (!def)
-      return json2;
+      return json3;
     const inlined = stringifyKeyNames(bySchema, def, visited);
-    return inlined === def ? json2 : inlined;
+    return inlined === def ? json3 : inlined;
   }
   for (const keyword of ["anyOf", "oneOf"]) {
-    const branches = json2[keyword];
+    const branches = json3[keyword];
     if (!Array.isArray(branches))
       continue;
     const mapped = branches.map((branch) => stringifyKeyNames(bySchema, branch, visited));
     if (mapped.some((branch, i) => branch !== branches[i]))
-      json2 = { ...json2, [keyword]: mapped };
+      json3 = { ...json3, [keyword]: mapped };
   }
-  const types = Array.isArray(json2.type) ? json2.type : [json2.type];
+  const types = Array.isArray(json3.type) ? json3.type : [json3.type];
   const numericType = !types.includes("string") && types.some((t) => t === "number" || t === "integer");
-  const values = json2.enum ?? (json2.const !== void 0 ? [json2.const] : void 0);
+  const values = json3.enum ?? (json3.const !== void 0 ? [json3.const] : void 0);
   if (!numericType && !values?.some((v) => typeof v === "number"))
-    return json2;
-  const { minimum, maximum, exclusiveMinimum, exclusiveMaximum, multipleOf, format, id: id2, ...rest } = json2;
+    return json3;
+  const { minimum, maximum, exclusiveMinimum, exclusiveMaximum, multipleOf, format, id: id2, ...rest } = json3;
   if (rest.enum)
     rest.enum = rest.enum.map((v) => typeof v === "number" ? String(v) : v);
   else if (typeof rest.const === "number")
@@ -16684,9 +16690,9 @@ function rewriteKeyNames(ctx) {
   }
 }
 var recordProcessor = (schema, ctx, _json, params) => {
-  const json2 = _json;
+  const json3 = _json;
   const def = schema._zod.def;
-  json2.type = "object";
+  json3.type = "object";
   const keyType = def.keyType;
   const patterns = aggregateChecks(keyType).patterns;
   if (def.mode === "loose" && patterns && patterns.size > 0) {
@@ -16694,13 +16700,13 @@ var recordProcessor = (schema, ctx, _json, params) => {
       ...params,
       path: [...params.path, "patternProperties", "*"]
     });
-    json2.patternProperties = {};
+    json3.patternProperties = {};
     for (const pattern of patterns) {
-      assignProp(json2.patternProperties, exactPattern(pattern).source, valueSchema);
+      assignProp(json3.patternProperties, exactPattern(pattern).source, valueSchema);
     }
   } else {
     if (ctx.target === "draft-07" || ctx.target === "draft-2020-12") {
-      json2.propertyNames = processSchema(def.keyType, ctx, {
+      json3.propertyNames = processSchema(def.keyType, ctx, {
         ...params,
         path: [...params.path, "propertyNames"]
       });
@@ -16712,7 +16718,7 @@ var recordProcessor = (schema, ctx, _json, params) => {
       }
       pending.push(schema);
     }
-    json2.additionalProperties = processSchema(def.valueType, ctx, {
+    json3.additionalProperties = processSchema(def.valueType, ctx, {
       ...params,
       path: [...params.path, "additionalProperties"]
     });
@@ -16722,19 +16728,19 @@ var recordProcessor = (schema, ctx, _json, params) => {
   if (keyValues && !def.partial && !omittableOnInput) {
     const validKeyValues = [...keyValues].filter((v) => typeof v === "string" || typeof v === "number");
     if (validKeyValues.length > 0) {
-      json2.required = validKeyValues.map(String);
+      json3.required = validKeyValues.map(String);
     }
   }
 };
-var nullableProcessor = (schema, ctx, json2, params) => {
+var nullableProcessor = (schema, ctx, json3, params) => {
   const def = schema._zod.def;
   const inner = processSchema(def.innerType, ctx, params);
   const seen = ctx.seen.get(schema);
   if (ctx.target === "openapi-3.0") {
     seen.ref = def.innerType;
-    json2.nullable = true;
+    json3.nullable = true;
   } else {
-    json2.anyOf = [inner, { type: "null" }];
+    json3.anyOf = [inner, { type: "null" }];
   }
 };
 var nonoptionalProcessor = (schema, ctx, _json, params) => {
@@ -16744,7 +16750,7 @@ var nonoptionalProcessor = (schema, ctx, _json, params) => {
   seen.ref = def.innerType;
 };
 var UNREPRESENTABLE_DEFAULT = Symbol();
-function serializeDefaultValue(value, schema, ctx, json2, params) {
+function serializeDefaultValue(value, schema, ctx, json3, params) {
   let unrepresentable = false;
   const serialized = JSON.stringify(value, (_, val) => {
     if (typeof val !== "bigint")
@@ -16754,30 +16760,30 @@ function serializeDefaultValue(value, schema, ctx, json2, params) {
   });
   if (!unrepresentable)
     return JSON.parse(serialized);
-  handleUnrepresentable(schema, ctx, json2, params, "BigInt defaults cannot be represented in JSON Schema");
+  handleUnrepresentable(schema, ctx, json3, params, "BigInt defaults cannot be represented in JSON Schema");
   return UNREPRESENTABLE_DEFAULT;
 }
-var defaultProcessor = (schema, ctx, json2, params) => {
+var defaultProcessor = (schema, ctx, json3, params) => {
   const def = schema._zod.def;
   processSchema(def.innerType, ctx, params);
   const seen = ctx.seen.get(schema);
   seen.ref = def.innerType;
-  const value = serializeDefaultValue(def.defaultValue, schema, ctx, json2, params);
+  const value = serializeDefaultValue(def.defaultValue, schema, ctx, json3, params);
   if (value !== UNREPRESENTABLE_DEFAULT)
-    json2.default = value;
+    json3.default = value;
 };
-var prefaultProcessor = (schema, ctx, json2, params) => {
+var prefaultProcessor = (schema, ctx, json3, params) => {
   const def = schema._zod.def;
   processSchema(def.innerType, ctx, params);
   const seen = ctx.seen.get(schema);
   seen.ref = def.innerType;
   if (ctx.io !== "input")
     return;
-  const value = serializeDefaultValue(def.defaultValue, schema, ctx, json2, params);
+  const value = serializeDefaultValue(def.defaultValue, schema, ctx, json3, params);
   if (value !== UNREPRESENTABLE_DEFAULT)
-    json2._prefault = value;
+    json3._prefault = value;
 };
-var catchProcessor = (schema, ctx, json2, params) => {
+var catchProcessor = (schema, ctx, json3, params) => {
   const def = schema._zod.def;
   processSchema(def.innerType, ctx, params);
   const seen = ctx.seen.get(schema);
@@ -16786,10 +16792,10 @@ var catchProcessor = (schema, ctx, json2, params) => {
   try {
     catchValue = def.catchValue(void 0);
   } catch {
-    handleUnrepresentable(schema, ctx, json2, params, "Dynamic catch values are not supported in JSON Schema");
+    handleUnrepresentable(schema, ctx, json3, params, "Dynamic catch values are not supported in JSON Schema");
     return;
   }
-  json2.default = catchValue;
+  json3.default = catchValue;
 };
 var pipeProcessor = (schema, ctx, _json, params) => {
   const def = schema._zod.def;
@@ -16799,12 +16805,12 @@ var pipeProcessor = (schema, ctx, _json, params) => {
   const seen = ctx.seen.get(schema);
   seen.ref = innerType;
 };
-var readonlyProcessor = (schema, ctx, json2, params) => {
+var readonlyProcessor = (schema, ctx, json3, params) => {
   const def = schema._zod.def;
   processSchema(def.innerType, ctx, params);
   const seen = ctx.seen.get(schema);
   seen.ref = def.innerType;
-  json2.readOnly = true;
+  json3.readOnly = true;
 };
 var promiseProcessor = (schema, ctx, _json, params) => {
   const def = schema._zod.def;
@@ -17446,7 +17452,7 @@ var _ZodString = /* @__PURE__ */ $constructor(
   (inst, def) => {
     $ZodString.init(inst, def);
     ZodType.init(inst, def);
-    inst._zod.processJSONSchema = (ctx, json2, params) => stringProcessor(inst, ctx, json2, params);
+    inst._zod.processJSONSchema = (ctx, json3, params) => stringProcessor(inst, ctx, json3, params);
   },
   /* @__PURE__ */ util_exports.derived({
     format: (inst) => aggregateChecks(inst).format ?? null,
@@ -17805,7 +17811,7 @@ var ZodNumber = /* @__PURE__ */ $constructor(
   (inst, def) => {
     $ZodNumber.init(inst, def);
     ZodType.init(inst, def);
-    inst._zod.processJSONSchema = (ctx, json2, params) => numberProcessor(inst, ctx, json2, params);
+    inst._zod.processJSONSchema = (ctx, json3, params) => numberProcessor(inst, ctx, json3, params);
     inst.isFinite = true;
   },
   /* @__PURE__ */ util_exports.derived({
@@ -17895,7 +17901,7 @@ function uint32(params) {
 var ZodBoolean = /* @__PURE__ */ $constructor("ZodBoolean", (inst, def) => {
   $ZodBoolean.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => booleanProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => booleanProcessor(inst, ctx, json3, params);
 });
 function boolean2(params) {
   return _boolean(ZodBoolean, params);
@@ -17905,7 +17911,7 @@ var ZodBigInt = /* @__PURE__ */ $constructor(
   (inst, def) => {
     $ZodBigInt.init(inst, def);
     ZodType.init(inst, def);
-    inst._zod.processJSONSchema = (ctx, json2, params) => bigintProcessor(inst, ctx, json2, params);
+    inst._zod.processJSONSchema = (ctx, json3, params) => bigintProcessor(inst, ctx, json3, params);
   },
   /* @__PURE__ */ util_exports.derived({
     minValue: (inst) => aggregateChecks(inst).minimum ?? null,
@@ -17963,7 +17969,7 @@ function uint64(params) {
 var ZodSymbol = /* @__PURE__ */ $constructor("ZodSymbol", (inst, def) => {
   $ZodSymbol.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => symbolProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => symbolProcessor(inst, ctx, json3, params);
 });
 function symbol(params) {
   return _symbol(ZodSymbol, params);
@@ -17971,7 +17977,7 @@ function symbol(params) {
 var ZodUndefined = /* @__PURE__ */ $constructor("ZodUndefined", (inst, def) => {
   $ZodUndefined.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => undefinedProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => undefinedProcessor(inst, ctx, json3, params);
 });
 function _undefined3(params) {
   return _undefined2(ZodUndefined, params);
@@ -17979,7 +17985,7 @@ function _undefined3(params) {
 var ZodNull = /* @__PURE__ */ $constructor("ZodNull", (inst, def) => {
   $ZodNull.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => nullProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => nullProcessor(inst, ctx, json3, params);
 });
 function _null3(params) {
   return _null2(ZodNull, params);
@@ -17987,7 +17993,7 @@ function _null3(params) {
 var ZodAny = /* @__PURE__ */ $constructor("ZodAny", (inst, def) => {
   $ZodAny.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => anyProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => anyProcessor(inst, ctx, json3, params);
 });
 function any() {
   return _any(ZodAny);
@@ -17995,7 +18001,7 @@ function any() {
 var ZodUnknown = /* @__PURE__ */ $constructor("ZodUnknown", (inst, def) => {
   $ZodUnknown.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => unknownProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => unknownProcessor(inst, ctx, json3, params);
 });
 function unknown() {
   return _unknown(ZodUnknown);
@@ -18003,7 +18009,7 @@ function unknown() {
 var ZodNever = /* @__PURE__ */ $constructor("ZodNever", (inst, def) => {
   $ZodNever.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => neverProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => neverProcessor(inst, ctx, json3, params);
 });
 function never(params) {
   return _never(ZodNever, params);
@@ -18011,7 +18017,7 @@ function never(params) {
 var ZodVoid = /* @__PURE__ */ $constructor("ZodVoid", (inst, def) => {
   $ZodVoid.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => voidProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => voidProcessor(inst, ctx, json3, params);
 });
 function _void2(params) {
   return _void(ZodVoid, params);
@@ -18021,7 +18027,7 @@ var ZodDate = /* @__PURE__ */ $constructor(
   (inst, def) => {
     $ZodDate.init(inst, def);
     ZodType.init(inst, def);
-    inst._zod.processJSONSchema = (ctx, json2, params) => dateProcessor(inst, ctx, json2, params);
+    inst._zod.processJSONSchema = (ctx, json3, params) => dateProcessor(inst, ctx, json3, params);
     inst.min = (value, params) => inst.check(_gte(value, params));
     inst.max = (value, params) => inst.check(_lte(value, params));
   },
@@ -18043,7 +18049,7 @@ var ZodArray = /* @__PURE__ */ $constructor("ZodArray", (inst, def) => {
   _ensureDefaultMemoizer();
   $ZodArray.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => arrayProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => arrayProcessor(inst, ctx, json3, params);
   inst.element = def.element;
 }, {
   min(n, params) {
@@ -18073,7 +18079,7 @@ var ZodObject = /* @__PURE__ */ $constructor("ZodObject", (inst, def) => {
   _ensureDefaultMemoizer();
   $ZodObjectJIT.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => objectProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => objectProcessor(inst, ctx, json3, params);
   util_exports.installLazyProp(inst, "shape", (self) => self._zod.def.shape, false);
 }, {
   keyof() {
@@ -18146,7 +18152,7 @@ function looseObject(shape, params) {
 var ZodUnion = /* @__PURE__ */ $constructor("ZodUnion", (inst, def) => {
   $ZodUnion.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => unionProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => unionProcessor(inst, ctx, json3, params);
   inst.options = def.options;
 });
 function union(options, params) {
@@ -18159,7 +18165,7 @@ function union(options, params) {
 var ZodXor = /* @__PURE__ */ $constructor("ZodXor", (inst, def) => {
   ZodUnion.init(inst, def);
   $ZodXor.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => unionProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => unionProcessor(inst, ctx, json3, params);
   inst.options = def.options;
 });
 function xor(options, params) {
@@ -18185,7 +18191,7 @@ function discriminatedUnion(discriminator, options, params) {
 var ZodIntersection = /* @__PURE__ */ $constructor("ZodIntersection", (inst, def) => {
   $ZodIntersection.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => intersectionProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => intersectionProcessor(inst, ctx, json3, params);
 });
 function intersection(left, right) {
   return new ZodIntersection({
@@ -18198,7 +18204,7 @@ var ZodTuple = /* @__PURE__ */ $constructor("ZodTuple", (inst, def) => {
   _ensureDefaultMemoizer();
   $ZodTuple.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => tupleProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => tupleProcessor(inst, ctx, json3, params);
 }, {
   rest(rest) {
     return this.clone({
@@ -18231,7 +18237,7 @@ var ZodRecord = /* @__PURE__ */ $constructor("ZodRecord", (inst, def) => {
   _ensureDefaultMemoizer();
   $ZodRecord.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => recordProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => recordProcessor(inst, ctx, json3, params);
   inst.keyType = def.keyType;
   inst.valueType = def.valueType;
 });
@@ -18273,7 +18279,7 @@ var ZodMap = /* @__PURE__ */ $constructor("ZodMap", (inst, def) => {
   _ensureDefaultMemoizer();
   $ZodMap.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => mapProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => mapProcessor(inst, ctx, json3, params);
   inst.keyType = def.keyType;
   inst.valueType = def.valueType;
   inst.min = (...args) => inst.check(_minSize(...args));
@@ -18293,7 +18299,7 @@ var ZodSet = /* @__PURE__ */ $constructor("ZodSet", (inst, def) => {
   _ensureDefaultMemoizer();
   $ZodSet.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => setProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => setProcessor(inst, ctx, json3, params);
   inst.min = (...args) => inst.check(_minSize(...args));
   inst.nonempty = (params) => inst.check(_minSize(1, params));
   inst.max = (...args) => inst.check(_maxSize(...args));
@@ -18309,7 +18315,7 @@ function set(valueType, params) {
 var ZodEnum = /* @__PURE__ */ $constructor("ZodEnum", (inst, def) => {
   $ZodEnum.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => enumProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => enumProcessor(inst, ctx, json3, params);
   inst.enum = def.entries;
   inst.options = [...inst._zod.values];
   const keys = new Set(Object.keys(def.entries));
@@ -18362,7 +18368,7 @@ function nativeEnum(entries, params) {
 var ZodLiteral = /* @__PURE__ */ $constructor("ZodLiteral", (inst, def) => {
   $ZodLiteral.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => literalProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => literalProcessor(inst, ctx, json3, params);
   inst.values = new Set(def.values);
   Object.defineProperty(inst, "value", {
     get() {
@@ -18383,7 +18389,7 @@ function literal(value, params) {
 var ZodFile = /* @__PURE__ */ $constructor("ZodFile", (inst, def) => {
   $ZodFile.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => fileProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => fileProcessor(inst, ctx, json3, params);
   inst.min = (size, params) => inst.check(_minSize(size, params));
   inst.max = (size, params) => inst.check(_maxSize(size, params));
   inst.mime = (types, params) => inst.check(_mime(Array.isArray(types) ? types : [types], params));
@@ -18395,7 +18401,7 @@ var ZodTransform = /* @__PURE__ */ $constructor("ZodTransform", (inst, def) => {
   _ensureDefaultMemoizer();
   $ZodTransform.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => transformProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => transformProcessor(inst, ctx, json3, params);
   inst._zod.parse = (payload, _ctx) => {
     if (_ctx.direction === "backward") {
       throw new $ZodEncodeError(inst.constructor.name);
@@ -18434,7 +18440,7 @@ function transform(fn) {
 var ZodOptional = /* @__PURE__ */ $constructor("ZodOptional", (inst, def) => {
   $ZodOptional.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => optionalProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => optionalProcessor(inst, ctx, json3, params);
   inst.unwrap = () => inst._zod.def.innerType;
 });
 function optional(innerType) {
@@ -18446,7 +18452,7 @@ function optional(innerType) {
 var ZodExactOptional = /* @__PURE__ */ $constructor("ZodExactOptional", (inst, def) => {
   $ZodExactOptional.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => optionalProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => optionalProcessor(inst, ctx, json3, params);
   inst.unwrap = () => inst._zod.def.innerType;
 });
 function exactOptional(innerType) {
@@ -18458,7 +18464,7 @@ function exactOptional(innerType) {
 var ZodNullable = /* @__PURE__ */ $constructor("ZodNullable", (inst, def) => {
   $ZodNullable.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => nullableProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => nullableProcessor(inst, ctx, json3, params);
   inst.unwrap = () => inst._zod.def.innerType;
 });
 function nullable(innerType) {
@@ -18473,7 +18479,7 @@ function nullish2(innerType) {
 var ZodDefault = /* @__PURE__ */ $constructor("ZodDefault", (inst, def) => {
   $ZodDefault.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => defaultProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => defaultProcessor(inst, ctx, json3, params);
   inst.unwrap = () => inst._zod.def.innerType;
   inst.removeDefault = inst.unwrap;
 });
@@ -18489,7 +18495,7 @@ function _default2(innerType, defaultValue) {
 var ZodPrefault = /* @__PURE__ */ $constructor("ZodPrefault", (inst, def) => {
   $ZodPrefault.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => prefaultProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => prefaultProcessor(inst, ctx, json3, params);
   inst.unwrap = () => inst._zod.def.innerType;
 });
 function prefault(innerType, defaultValue) {
@@ -18504,7 +18510,7 @@ function prefault(innerType, defaultValue) {
 var ZodNonOptional = /* @__PURE__ */ $constructor("ZodNonOptional", (inst, def) => {
   $ZodNonOptional.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => nonoptionalProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => nonoptionalProcessor(inst, ctx, json3, params);
   inst.unwrap = () => inst._zod.def.innerType;
 });
 function nonoptional(innerType, params) {
@@ -18517,7 +18523,7 @@ function nonoptional(innerType, params) {
 var ZodSuccess = /* @__PURE__ */ $constructor("ZodSuccess", (inst, def) => {
   $ZodSuccess.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => successProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => successProcessor(inst, ctx, json3, params);
   inst.unwrap = () => inst._zod.def.innerType;
 });
 function success(innerType) {
@@ -18529,7 +18535,7 @@ function success(innerType) {
 var ZodCatch = /* @__PURE__ */ $constructor("ZodCatch", (inst, def) => {
   $ZodCatch.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => catchProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => catchProcessor(inst, ctx, json3, params);
   inst.unwrap = () => inst._zod.def.innerType;
   inst.removeCatch = inst.unwrap;
 });
@@ -18543,7 +18549,7 @@ function _catch2(innerType, catchValue) {
 var ZodNaN = /* @__PURE__ */ $constructor("ZodNaN", (inst, def) => {
   $ZodNaN.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => nanProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => nanProcessor(inst, ctx, json3, params);
 });
 function nan(params) {
   return _nan(ZodNaN, params);
@@ -18551,7 +18557,7 @@ function nan(params) {
 var ZodPipe = /* @__PURE__ */ $constructor("ZodPipe", (inst, def) => {
   $ZodPipe.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => pipeProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => pipeProcessor(inst, ctx, json3, params);
   inst.in = def.in;
   inst.out = def.out;
 });
@@ -18593,7 +18599,7 @@ var ZodPreprocess = /* @__PURE__ */ $constructor("ZodPreprocess", (inst, def) =>
 var ZodReadonly = /* @__PURE__ */ $constructor("ZodReadonly", (inst, def) => {
   $ZodReadonly.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => readonlyProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => readonlyProcessor(inst, ctx, json3, params);
   inst.unwrap = () => inst._zod.def.innerType;
 });
 function readonly(innerType) {
@@ -18605,7 +18611,7 @@ function readonly(innerType) {
 var ZodTemplateLiteral = /* @__PURE__ */ $constructor("ZodTemplateLiteral", (inst, def) => {
   $ZodTemplateLiteral.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => templateLiteralProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => templateLiteralProcessor(inst, ctx, json3, params);
 });
 function templateLiteral(parts, params) {
   return new ZodTemplateLiteral({
@@ -18617,7 +18623,7 @@ function templateLiteral(parts, params) {
 var ZodLazy = /* @__PURE__ */ $constructor("ZodLazy", (inst, def) => {
   $ZodLazy.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => lazyProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => lazyProcessor(inst, ctx, json3, params);
   inst.unwrap = () => inst._zod.def.getter();
 });
 function lazy(getter) {
@@ -18629,7 +18635,7 @@ function lazy(getter) {
 var ZodPromise = /* @__PURE__ */ $constructor("ZodPromise", (inst, def) => {
   $ZodPromise.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => promiseProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => promiseProcessor(inst, ctx, json3, params);
   inst.unwrap = () => inst._zod.def.innerType;
 });
 function promise(innerType) {
@@ -18641,7 +18647,7 @@ function promise(innerType) {
 var ZodFunction = /* @__PURE__ */ $constructor("ZodFunction", (inst, def) => {
   $ZodFunction.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => functionProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => functionProcessor(inst, ctx, json3, params);
 });
 function _function(params) {
   return new ZodFunction({
@@ -18653,7 +18659,7 @@ function _function(params) {
 var ZodCustom = /* @__PURE__ */ $constructor("ZodCustom", (inst, def) => {
   $ZodCustom.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => customProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => customProcessor(inst, ctx, json3, params);
 });
 function check(fn) {
   const ch = new $ZodCheck({
@@ -19738,6 +19744,221 @@ var LINE_H = 20;
 var BOX_PAD = 12;
 var TEXT_MAX_W = 640;
 
+// src/model.ts
+external_exports.config({ jitless: true });
+var coord = external_exports.number().finite().min(-WORLD_LIMIT).max(WORLD_LIMIT);
+var color = external_exports.enum(COLORS).optional();
+var id = external_exports.string().regex(/^[batp]\d+$/);
+var ref = external_exports.string().regex(/^[A-Za-z][A-Za-z0-9_-]*$/).max(60);
+var alias = external_exports.string().regex(/^[A-Za-z][A-Za-z0-9_-]*$/).max(60).refine((value) => !/^[batp]\d+$/.test(value), "An alias must not look like an id");
+var boxInput = external_exports.strictObject({
+  type: external_exports.literal("box"),
+  x: coord,
+  y: coord,
+  w: coord.positive(),
+  h: coord.positive(),
+  label: external_exports.string().max(200).optional(),
+  color
+});
+var heads = external_exports.enum(["none", "start", "end", "both"]);
+var arrowInput = external_exports.strictObject({
+  type: external_exports.literal("arrow"),
+  x1: coord,
+  y1: coord,
+  x2: coord,
+  y2: coord,
+  /** Which ends carry an arrowhead. "none" draws a plain line. Default "end". */
+  heads: heads.optional(),
+  from: ref.optional(),
+  to: ref.optional(),
+  label: external_exports.string().max(200).optional(),
+  color
+});
+var textInput = external_exports.strictObject({
+  type: external_exports.literal("text"),
+  x: coord,
+  y: coord,
+  text: external_exports.string().min(1).max(500),
+  color
+});
+var pathInput = external_exports.strictObject({
+  type: external_exports.literal("path"),
+  points: external_exports.array(external_exports.tuple([coord, coord])).min(2).max(2e3),
+  color
+});
+var elementInputSchema = external_exports.discriminatedUnion("type", [
+  boxInput,
+  arrowInput,
+  textInput,
+  pathInput
+]);
+var elementSchema = external_exports.discriminatedUnion("type", [
+  boxInput.extend({ id }),
+  arrowInput.extend({ id }),
+  textInput.extend({ id }),
+  pathInput.extend({ id })
+]);
+var docSchema = external_exports.object({
+  name: external_exports.string(),
+  rev: external_exports.number().int(),
+  next: external_exports.number().int(),
+  elements: external_exports.array(elementSchema)
+});
+var patch = external_exports.strictObject({
+  x: coord,
+  y: coord,
+  w: coord.positive(),
+  h: coord.positive(),
+  x1: coord,
+  y1: coord,
+  x2: coord,
+  y2: coord,
+  from: ref.nullable(),
+  to: ref.nullable(),
+  label: external_exports.string().max(200),
+  text: external_exports.string().min(1).max(500),
+  color: external_exports.enum(COLORS),
+  heads
+}).partial();
+var opSchema = external_exports.discriminatedUnion("op", [
+  external_exports.strictObject({ op: external_exports.literal("add"), element: elementInputSchema, as: alias.optional() }),
+  external_exports.strictObject({ op: external_exports.literal("update"), id: ref, patch }),
+  external_exports.strictObject({ op: external_exports.literal("move"), id: ref, dx: coord, dy: coord }),
+  external_exports.strictObject({ op: external_exports.literal("delete"), id: ref }),
+  external_exports.strictObject({ op: external_exports.literal("clear") })
+]);
+function emptyDoc(name) {
+  return { name, rev: 0, next: 1, elements: [] };
+}
+var PREFIX = { box: "b", arrow: "a", text: "t", path: "p" };
+var PATCHABLE = {
+  box: ["x", "y", "w", "h", "label", "color"],
+  arrow: ["x1", "y1", "x2", "y2", "label", "color", "heads"],
+  text: ["x", "y", "text", "color"],
+  path: ["color"]
+};
+function parseOps(batch) {
+  const result = external_exports.array(opSchema).min(1).max(500).safeParse(batch);
+  if (!result.success) throw new Error(plainIssue(result.error));
+  return result.data;
+}
+function plainIssue(error62) {
+  const issue2 = error62.issues[0];
+  const where = issue2.path.length === 0 ? "" : ` (${issue2.path.map(String).join(" \u203A ")})`;
+  return `That change is not valid${where}: ${issue2.message}`;
+}
+function rangeMessage(error62, elements) {
+  const issue2 = error62.issues[0];
+  const index = issue2.path[1];
+  const id2 = issue2.path[0] === "elements" && typeof index === "number" ? elements[index]?.id : void 0;
+  if (id2 !== void 0)
+    return `That change would move ${id2} past the canvas edge. Coordinates stay between -${WORLD_LIMIT} and ${WORLD_LIMIT}.`;
+  return `That change is not valid: ${issue2.message}`;
+}
+function applyOps(doc2, batch) {
+  const ops = parseOps(batch);
+  let elements = doc2.elements.map((element) => ({ ...element }));
+  let next2 = doc2.next;
+  const added = [];
+  const aliases = /* @__PURE__ */ new Map();
+  const resolve = (reference) => aliases.get(reference) ?? reference;
+  const find = (elementId) => {
+    const element = elements.find((candidate) => candidate.id === elementId);
+    if (element === void 0) throw new Error(`no element ${elementId}`);
+    return element;
+  };
+  const assertBox = (elementId) => {
+    if (elementId == null) return;
+    if (find(elementId).type !== "box") throw new Error(`${elementId} is not a box`);
+  };
+  for (const op of ops) {
+    switch (op.op) {
+      case "add": {
+        const element = op.element.type === "arrow" ? {
+          ...op.element,
+          ...op.element.from === void 0 ? {} : { from: resolve(op.element.from) },
+          ...op.element.to === void 0 ? {} : { to: resolve(op.element.to) }
+        } : op.element;
+        if (element.type === "arrow") {
+          assertBox(element.from);
+          assertBox(element.to);
+          if (element.from !== void 0 && element.from === element.to)
+            throw new Error("arrow needs two different boxes");
+        }
+        const elementId = `${PREFIX[element.type]}${next2++}`;
+        if (op.as !== void 0) {
+          if (aliases.has(op.as)) throw new Error(`alias "${op.as}" is used twice`);
+          aliases.set(op.as, elementId);
+        }
+        elements.push({ ...element, id: elementId });
+        added.push(elementId);
+        break;
+      }
+      case "update": {
+        const element = find(resolve(op.id));
+        const { from: rawFrom, to: rawTo, ...rest } = op.patch;
+        if (element.type !== "arrow" && (rawFrom !== void 0 || rawTo !== void 0))
+          throw new Error(`${op.id} is a ${element.type}; only an arrow has "from" and "to"`);
+        const from = rawFrom == null ? rawFrom : resolve(rawFrom);
+        const to = rawTo == null ? rawTo : resolve(rawTo);
+        if (element.type === "arrow") {
+          assertBox(from);
+          assertBox(to);
+          if (from === null) delete element.from;
+          else if (from !== void 0) element.from = from;
+          if (to === null) delete element.to;
+          else if (to !== void 0) element.to = to;
+          if (element.from !== void 0 && element.from === element.to)
+            throw new Error("arrow needs two different boxes");
+        }
+        for (const [key, value] of Object.entries(rest)) {
+          if (!PATCHABLE[element.type].includes(key))
+            throw new Error(`${op.id} is a ${element.type}; it has no "${key}"`);
+          element[key] = value;
+        }
+        break;
+      }
+      case "move": {
+        const element = find(resolve(op.id));
+        if (element.type === "arrow" && (element.from !== void 0 || element.to !== void 0))
+          throw new Error(`${op.id} is attached to a box; move the box instead`);
+        switch (element.type) {
+          case "box":
+          case "text":
+            element.x += op.dx;
+            element.y += op.dy;
+            break;
+          case "arrow":
+            element.x1 += op.dx;
+            element.y1 += op.dy;
+            element.x2 += op.dx;
+            element.y2 += op.dy;
+            break;
+          case "path":
+            element.points = element.points.map(([x, y]) => [x + op.dx, y + op.dy]);
+            break;
+        }
+        break;
+      }
+      case "delete": {
+        const target = resolve(op.id);
+        find(target);
+        elements = elements.filter(
+          (element) => element.id !== target && !(element.type === "arrow" && (element.from === target || element.to === target))
+        );
+        break;
+      }
+      case "clear":
+        elements = [];
+        break;
+    }
+  }
+  const result = { ...doc2, rev: doc2.rev + 1, next: next2, elements };
+  const checked = docSchema.safeParse(result);
+  if (!checked.success) throw new Error(rangeMessage(checked.error, elements));
+  return { doc: result, added };
+}
+
 // src/fonts/metrics.ts
 var ASCII = [
   261,
@@ -20023,7 +20244,8 @@ var Heap = class {
   get size() {
     return this.f.length;
   }
-  peek() {
+  /** The smallest priority; the state stays in the heap. */
+  peekPriority() {
     return this.f[0];
   }
   push(f, s) {
@@ -20042,7 +20264,8 @@ var Heap = class {
     fs[i] = f;
     ss[i] = s;
   }
-  pop() {
+  /** Removes and returns the state with the smallest priority. */
+  popState() {
     const fs = this.f;
     const ss = this.s;
     const top = ss[0];
@@ -20080,7 +20303,7 @@ function simplify(points) {
   }
   return out.length >= 2 ? out : [points[0], points[points.length - 1]];
 }
-function routeBetween(a, b, others, used) {
+function buildGrid(a, b, others, used) {
   const obstacles = [{ id: "", rect: a, cost: BOX_HIT }, { id: "", rect: b, cost: BOX_HIT }, ...others];
   const xKind = /* @__PURE__ */ new Map();
   const yKind = /* @__PURE__ */ new Map();
@@ -20196,6 +20419,11 @@ function routeBetween(a, b, others, used) {
     }
     return vCost[k];
   };
+  return { grid: { xs, ys, nx, ny, approach, stubCost, edgeCost }, starts, ends };
+}
+function routeBetween(a, b, others, used) {
+  const { grid, starts, ends } = buildGrid(a, b, others, used);
+  const { xs, ys, nx, ny, approach, stubCost, edgeCost } = grid;
   const goals = /* @__PURE__ */ new Map();
   for (const port of ends) {
     const node2 = approach(port);
@@ -20218,29 +20446,29 @@ function routeBetween(a, b, others, used) {
   for (const port of starts) {
     const node2 = approach(port);
     if (node2 === null) continue;
-    const s2 = node2 * 4 + port.dir;
+    const s = node2 * 4 + port.dir;
     const cost = stubCost(port, node2);
-    if (cost < g[s2]) {
-      g[s2] = cost;
-      startOf.set(s2, port);
-      heap.push(cost + h(node2), s2);
+    if (cost < g[s]) {
+      g[s] = cost;
+      startOf.set(s, port);
+      heap.push(cost + h(node2), s);
     }
   }
   let best = Infinity;
   let bestState = -1;
   let bestPort = null;
-  while (heap.size > 0 && heap.peek() < best) {
-    const s2 = heap.pop();
-    const node2 = s2 >> 2;
-    const d = s2 & 3;
-    const here = g[s2];
+  while (heap.size > 0 && heap.peekPriority() < best) {
+    const s = heap.popState();
+    const node2 = s >> 2;
+    const d = s & 3;
+    const here = g[s];
     for (const goal of goals.get(node2) ?? []) {
       const inward = reverse(goal.port.dir);
       if (d === goal.port.dir) continue;
       const total = here + goal.cost + (d === inward ? 0 : BEND);
       if (total < best) {
         best = total;
-        bestState = s2;
+        bestState = s;
         bestPort = goal.port;
       }
     }
@@ -20254,7 +20482,7 @@ function routeBetween(a, b, others, used) {
       const cost = here + edgeCost(i, j, nd) + (nd === d ? 0 : BEND);
       if (cost < g[next2]) {
         g[next2] = cost;
-        parent[next2] = s2;
+        parent[next2] = s;
         heap.push(cost + h(next2 >> 2), next2);
       }
     }
@@ -20264,6 +20492,10 @@ function routeBetween(a, b, others, used) {
     const to = { x: b.x + b.w / 2, y: b.y + b.h / 2 };
     return [clipToBox(a, from, to), clipToBox(b, to, from)];
   }
+  return routeFrom(grid, parent, bestState, startOf, bestPort);
+}
+function routeFrom(grid, parent, bestState, startOf, bestPort) {
+  const { xs, ys, nx } = grid;
   const nodes = [];
   let s = bestState;
   let first = s;
@@ -20297,13 +20529,13 @@ function segmentEnters(p, q, r2) {
     [-dy, p.y - r2.y],
     [dy, r2.y + r2.h - p.y]
   ];
-  for (const [step2, room] of edges) {
-    if (step2 === 0) {
+  for (const [step, room] of edges) {
+    if (step === 0) {
       if (room <= 0) return false;
       continue;
     }
-    const t = room / step2;
-    if (step2 < 0) t0 = Math.max(t0, t);
+    const t = room / step;
+    if (step < 0) t0 = Math.max(t0, t);
     else t1 = Math.min(t1, t);
     if (t0 >= t1) return false;
   }
@@ -20312,6 +20544,43 @@ function segmentEnters(p, q, r2) {
 function pathEnters(points, r2) {
   for (let i = 0; i < points.length - 1; i++) if (segmentEnters(points[i], points[i + 1], r2)) return true;
   return false;
+}
+function placeLabel(arrow, path, runs, arrowIds, blockers, placed) {
+  const w = textWidth(arrow.label, ARROW_FONT) + LABEL_PAD;
+  const heads2 = arrow.heads ?? "end";
+  const headAtStart = heads2 === "start" || heads2 === "both";
+  const headAtEnd = heads2 === "end" || heads2 === "both";
+  const segments = path.slice(0, -1).map((p, i) => ({ p, q: path[i + 1], i }));
+  segments.sort((s, t) => Math.hypot(t.q.x - t.p.x, t.q.y - t.p.y) - Math.hypot(s.q.x - s.p.x, s.q.y - s.p.y));
+  let clean = null;
+  let covering = null;
+  for (const { p, q, i } of segments) {
+    const length = Math.hypot(q.x - p.x, q.y - p.y);
+    const horizontal = Math.abs(q.x - p.x) >= Math.abs(q.y - p.y);
+    const startRoom = i === 0 && headAtStart ? LABEL_HEAD_END : LABEL_END;
+    const endRoom = i === path.length - 2 && headAtEnd ? LABEL_HEAD_END : LABEL_END;
+    const span = horizontal ? w : LABEL_H;
+    const slack = length - span - startRoom - endRoom;
+    if (slack < 0) continue;
+    const centre = startRoom + span / 2 + slack / 2;
+    const offsets = [0];
+    for (let k = LABEL_STEP; k <= slack / 2; k += LABEL_STEP) offsets.push(-k, k);
+    for (const offset of offsets) {
+      const t = (centre + offset) / length;
+      const at = { x: p.x + (q.x - p.x) * t, y: p.y + (q.y - p.y) * t };
+      const rect = { x: at.x - w / 2, y: at.y - LABEL_H / 2, w, h: LABEL_H };
+      if (blockers.some((b) => intersects(rect, b)) || placed.some((b) => intersects(rect, inflate(b, LABEL_CLEAR)))) continue;
+      const over = arrowIds.find((id2) => id2 !== arrow.id && runs.get(id2).some((run) => runCrosses(run, rect)));
+      if (over === void 0) {
+        clean = rect;
+        break;
+      }
+      covering ??= { rect, over };
+    }
+    if (clean !== null) break;
+  }
+  const need = Math.ceil(w + LABEL_END + (headAtEnd || headAtStart ? LABEL_HEAD_END : LABEL_END));
+  return { rect: clean ?? covering?.rect ?? null, over: covering?.over ?? null, need };
 }
 var cache = /* @__PURE__ */ new WeakMap();
 function layoutOf(elements) {
@@ -20417,51 +20686,17 @@ function layoutOf(elements) {
   const labels = /* @__PURE__ */ new Map();
   const placed = [];
   const blockers = [...boxes.map((box) => inflate(box, LABEL_CLEAR)), ...texts.map((text) => inflate(text.ink, LABEL_CLEAR))];
+  const arrowIds = arrows.map((arrow) => arrow.id);
   for (const arrow of arrows) {
     if (arrow.label === void 0 || arrow.label === "") continue;
-    const path = routes.get(arrow.id);
-    const w = textWidth(arrow.label, ARROW_FONT) + LABEL_PAD;
-    const heads2 = arrow.heads ?? "end";
-    const headAtStart = heads2 === "start" || heads2 === "both";
-    const headAtEnd = heads2 === "end" || heads2 === "both";
-    const segments = path.slice(0, -1).map((p, i) => ({ p, q: path[i + 1], i }));
-    segments.sort((s, t) => Math.hypot(t.q.x - t.p.x, t.q.y - t.p.y) - Math.hypot(s.q.x - s.p.x, s.q.y - s.p.y));
-    let clean = null;
-    let covering = null;
-    for (const { p, q, i } of segments) {
-      const length = Math.hypot(q.x - p.x, q.y - p.y);
-      const horizontal = Math.abs(q.x - p.x) >= Math.abs(q.y - p.y);
-      const startRoom = i === 0 && headAtStart ? LABEL_HEAD_END : LABEL_END;
-      const endRoom = i === path.length - 2 && headAtEnd ? LABEL_HEAD_END : LABEL_END;
-      const span = horizontal ? w : LABEL_H;
-      const slack = length - span - startRoom - endRoom;
-      if (slack < 0) continue;
-      const centre = startRoom + span / 2 + slack / 2;
-      const offsets = [0];
-      for (let k = LABEL_STEP; k <= slack / 2; k += LABEL_STEP) offsets.push(-k, k);
-      for (const offset of offsets) {
-        const t = (centre + offset) / length;
-        const at = { x: p.x + (q.x - p.x) * t, y: p.y + (q.y - p.y) * t };
-        const rect = { x: at.x - w / 2, y: at.y - LABEL_H / 2, w, h: LABEL_H };
-        if (blockers.some((b) => intersects(rect, b)) || placed.some((b) => intersects(rect, inflate(b, LABEL_CLEAR)))) continue;
-        const over = arrows.find((other) => other.id !== arrow.id && runs.get(other.id).some((run) => runCrosses(run, rect)));
-        if (over === void 0) {
-          clean = rect;
-          break;
-        }
-        covering ??= { rect, over: over.id };
-      }
-      if (clean !== null) break;
-    }
-    const chosen = clean ?? covering?.rect ?? null;
-    if (chosen === null) {
-      const need = Math.ceil(w + LABEL_END + (headAtEnd || headAtStart ? LABEL_HEAD_END : LABEL_END));
-      note2([arrow.id], `${arrow.id} label ${JSON.stringify(arrow.label)} hidden: needs ${need}px of clear line`);
+    const choice = placeLabel(arrow, routes.get(arrow.id), runs, arrowIds, blockers, placed);
+    if (choice.rect === null) {
+      note2([arrow.id], `${arrow.id} label ${JSON.stringify(arrow.label)} hidden: needs ${choice.need}px of clear line`);
       continue;
     }
-    if (clean === null && covering !== null) note2([arrow.id, covering.over], `${arrow.id} label covers ${covering.over}`);
-    labels.set(arrow.id, chosen);
-    placed.push(chosen);
+    if (choice.over !== null) note2([arrow.id, choice.over], `${arrow.id} label covers ${choice.over}`);
+    labels.set(arrow.id, choice.rect);
+    placed.push(choice.rect);
   }
   const members2 = new WeakSet(elements);
   const layout = {
@@ -20475,221 +20710,14 @@ function layoutOf(elements) {
   return layout;
 }
 
-// src/model.ts
-external_exports.config({ jitless: true });
-var coord = external_exports.number().finite().min(-WORLD_LIMIT).max(WORLD_LIMIT);
-var color = external_exports.enum(COLORS).optional();
-var id = external_exports.string().regex(/^[batp]\d+$/);
-var ref = external_exports.string().regex(/^[A-Za-z][A-Za-z0-9_-]*$/).max(60);
-var alias = external_exports.string().regex(/^[A-Za-z][A-Za-z0-9_-]*$/).max(60).refine((value) => !/^[batp]\d+$/.test(value), "An alias must not look like an id");
-var boxInput = external_exports.strictObject({
-  type: external_exports.literal("box"),
-  x: coord,
-  y: coord,
-  w: coord.positive(),
-  h: coord.positive(),
-  label: external_exports.string().max(200).optional(),
-  color
-});
-var heads = external_exports.enum(["none", "start", "end", "both"]);
-var arrowInput = external_exports.strictObject({
-  type: external_exports.literal("arrow"),
-  x1: coord,
-  y1: coord,
-  x2: coord,
-  y2: coord,
-  /** Which ends carry an arrowhead. "none" draws a plain line. Default "end". */
-  heads: heads.optional(),
-  from: ref.optional(),
-  to: ref.optional(),
-  label: external_exports.string().max(200).optional(),
-  color
-});
-var textInput = external_exports.strictObject({
-  type: external_exports.literal("text"),
-  x: coord,
-  y: coord,
-  text: external_exports.string().min(1).max(500),
-  color
-});
-var pathInput = external_exports.strictObject({
-  type: external_exports.literal("path"),
-  points: external_exports.array(external_exports.tuple([coord, coord])).min(2).max(2e3),
-  color
-});
-var elementInputSchema = external_exports.discriminatedUnion("type", [
-  boxInput,
-  arrowInput,
-  textInput,
-  pathInput
-]);
-var elementSchema = external_exports.discriminatedUnion("type", [
-  boxInput.extend({ id }),
-  arrowInput.extend({ id }),
-  textInput.extend({ id }),
-  pathInput.extend({ id })
-]);
-var docSchema = external_exports.object({
-  name: external_exports.string(),
-  rev: external_exports.number().int(),
-  next: external_exports.number().int(),
-  elements: external_exports.array(elementSchema)
-});
-var patch = external_exports.strictObject({
-  x: coord,
-  y: coord,
-  w: coord.positive(),
-  h: coord.positive(),
-  x1: coord,
-  y1: coord,
-  x2: coord,
-  y2: coord,
-  from: ref.nullable(),
-  to: ref.nullable(),
-  label: external_exports.string().max(200),
-  text: external_exports.string().min(1).max(500),
-  color: external_exports.enum(COLORS),
-  heads
-}).partial();
-var opSchema = external_exports.discriminatedUnion("op", [
-  external_exports.strictObject({ op: external_exports.literal("add"), element: elementInputSchema, as: alias.optional() }),
-  external_exports.strictObject({ op: external_exports.literal("update"), id: ref, patch }),
-  external_exports.strictObject({ op: external_exports.literal("move"), id: ref, dx: coord, dy: coord }),
-  external_exports.strictObject({ op: external_exports.literal("delete"), id: ref }),
-  external_exports.strictObject({ op: external_exports.literal("clear") })
-]);
-function emptyDoc(name) {
-  return { name, rev: 0, next: 1, elements: [] };
-}
-var PREFIX = { box: "b", arrow: "a", text: "t", path: "p" };
-var PATCHABLE = {
-  box: ["x", "y", "w", "h", "label", "color"],
-  arrow: ["x1", "y1", "x2", "y2", "label", "color", "heads"],
-  text: ["x", "y", "text", "color"],
-  path: ["color"]
-};
-function parseOps(batch) {
-  const result = external_exports.array(opSchema).min(1).max(500).safeParse(batch);
-  if (!result.success) throw new Error(plainIssue(result.error));
-  return result.data;
-}
-function plainIssue(error62) {
-  const issue2 = error62.issues[0];
-  const where = issue2.path.length === 0 ? "" : ` (${issue2.path.map(String).join(" \u203A ")})`;
-  return `That change is not valid${where}: ${issue2.message}`;
-}
-function rangeMessage(error62, elements) {
-  const issue2 = error62.issues[0];
-  const index = issue2.path[1];
-  const id2 = issue2.path[0] === "elements" && typeof index === "number" ? elements[index]?.id : void 0;
-  if (id2 !== void 0)
-    return `That change would move ${id2} past the canvas edge. Coordinates stay between -${WORLD_LIMIT} and ${WORLD_LIMIT}.`;
-  return `That change is not valid: ${issue2.message}`;
-}
-function applyOps(doc2, batch) {
-  const ops = parseOps(batch);
-  let elements = doc2.elements.map((element) => ({ ...element }));
-  let next2 = doc2.next;
-  const added = [];
-  const aliases = /* @__PURE__ */ new Map();
-  const resolve = (reference) => aliases.get(reference) ?? reference;
-  const find = (elementId) => {
-    const element = elements.find((candidate) => candidate.id === elementId);
-    if (element === void 0) throw new Error(`no element ${elementId}`);
-    return element;
-  };
-  const assertBox = (elementId) => {
-    if (elementId == null) return;
-    if (find(elementId).type !== "box") throw new Error(`${elementId} is not a box`);
-  };
-  for (const op of ops) {
-    switch (op.op) {
-      case "add": {
-        const element = op.element.type === "arrow" ? {
-          ...op.element,
-          ...op.element.from === void 0 ? {} : { from: resolve(op.element.from) },
-          ...op.element.to === void 0 ? {} : { to: resolve(op.element.to) }
-        } : op.element;
-        if (element.type === "arrow") {
-          assertBox(element.from);
-          assertBox(element.to);
-          if (element.from !== void 0 && element.from === element.to)
-            throw new Error("arrow needs two different boxes");
-        }
-        const elementId = `${PREFIX[element.type]}${next2++}`;
-        if (op.as !== void 0) {
-          if (aliases.has(op.as)) throw new Error(`alias "${op.as}" is used twice`);
-          aliases.set(op.as, elementId);
-        }
-        elements.push({ ...element, id: elementId });
-        added.push(elementId);
-        break;
-      }
-      case "update": {
-        const element = find(resolve(op.id));
-        const { from: rawFrom, to: rawTo, ...rest } = op.patch;
-        if (element.type !== "arrow" && (rawFrom !== void 0 || rawTo !== void 0))
-          throw new Error(`${op.id} is a ${element.type}; only an arrow has "from" and "to"`);
-        const from = rawFrom == null ? rawFrom : resolve(rawFrom);
-        const to = rawTo == null ? rawTo : resolve(rawTo);
-        if (element.type === "arrow") {
-          assertBox(from);
-          assertBox(to);
-          if (from === null) delete element.from;
-          else if (from !== void 0) element.from = from;
-          if (to === null) delete element.to;
-          else if (to !== void 0) element.to = to;
-        }
-        for (const [key, value] of Object.entries(rest)) {
-          if (!PATCHABLE[element.type].includes(key))
-            throw new Error(`${op.id} is a ${element.type}; it has no "${key}"`);
-          element[key] = value;
-        }
-        break;
-      }
-      case "move": {
-        const element = find(resolve(op.id));
-        if (element.type === "arrow" && (element.from !== void 0 || element.to !== void 0))
-          throw new Error(`${op.id} is attached to a box; move the box instead`);
-        switch (element.type) {
-          case "box":
-          case "text":
-            element.x += op.dx;
-            element.y += op.dy;
-            break;
-          case "arrow":
-            element.x1 += op.dx;
-            element.y1 += op.dy;
-            element.x2 += op.dx;
-            element.y2 += op.dy;
-            break;
-          case "path":
-            element.points = element.points.map(([x, y]) => [x + op.dx, y + op.dy]);
-            break;
-        }
-        break;
-      }
-      case "delete": {
-        const target = resolve(op.id);
-        find(target);
-        elements = elements.filter(
-          (element) => element.id !== target && !(element.type === "arrow" && (element.from === target || element.to === target))
-        );
-        break;
-      }
-      case "clear":
-        elements = [];
-        break;
-    }
-  }
-  const result = { ...doc2, rev: doc2.rev + 1, next: next2, elements };
-  const checked = docSchema.safeParse(result);
-  if (!checked.success) throw new Error(rangeMessage(checked.error, elements));
-  return { doc: result, added };
-}
+// src/diagram.ts
 function arrowPoints(arrow, elements) {
   const layout = layoutOf(elements);
   return layout.owns(arrow) ? layout.routes.get(arrow.id) : layout.route(arrow);
+}
+function arrowLabelRect(arrow, elements) {
+  const layout = layoutOf(elements);
+  return layout.owns(arrow) ? layout.labels.get(arrow.id) ?? null : null;
 }
 function arrowEnds(arrow, elements) {
   const points = arrowPoints(arrow, elements);
@@ -20718,6 +20746,11 @@ function contentBounds(doc2) {
       }
       case "arrow": {
         for (const point of arrowPoints(element, doc2.elements)) add(point.x, point.y);
+        const label = arrowLabelRect(element, doc2.elements);
+        if (label !== null) {
+          add(label.x, label.y);
+          add(label.x + label.w, label.y + label.h);
+        }
         break;
       }
       case "path":
@@ -20761,185 +20794,6 @@ function layoutNotes(doc2) {
 }
 function layoutReport(notes) {
   return notes.length === 0 ? "" : `layout: ${notes.map((note2) => note2.text).join("; ")}`;
-}
-
-// src/protocol.ts
-var PANEL_ID = "canvas";
-var PNG_CHUNK_CHARS = 512 * 1024;
-var PNG_MAX_BYTES = 8 * 1024 * 1024;
-var count = external_exports.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
-var canvasName = external_exports.string().min(1).max(200);
-var threadId = external_exports.string().min(1).max(200);
-var note = external_exports.string().max(4e3);
-var pngData = external_exports.string().min(1).max(PNG_CHUNK_CHARS);
-var pageRequestSchema = external_exports.discriminatedUnion("call", [
-  external_exports.strictObject({ id: count, call: external_exports.literal("open"), threadId: threadId.optional(), name: canvasName.optional() }),
-  external_exports.strictObject({ id: count, call: external_exports.literal("list") }),
-  external_exports.strictObject({ id: count, call: external_exports.literal("context") }),
-  external_exports.strictObject({ id: count, call: external_exports.literal("apply"), name: canvasName, ops: external_exports.array(opSchema).min(1).max(500) }),
-  external_exports.strictObject({ id: count, call: external_exports.literal("undo"), name: canvasName }),
-  external_exports.strictObject({ id: count, call: external_exports.literal("redo"), name: canvasName }),
-  external_exports.strictObject({ id: count, call: external_exports.literal("delete"), name: canvasName }),
-  external_exports.strictObject({ id: count, call: external_exports.literal("threads"), threadId }),
-  external_exports.strictObject({ id: count, call: external_exports.literal("send"), name: canvasName, threadId, note }),
-  external_exports.strictObject({
-    id: count,
-    call: external_exports.literal("pngChunk"),
-    upload: external_exports.string().min(1).max(64),
-    index: count,
-    last: external_exports.boolean(),
-    data: pngData
-  })
-]);
-var pluginMessageSchema = external_exports.union([
-  external_exports.strictObject({ reply: count, ok: external_exports.literal(true), value: external_exports.unknown() }),
-  external_exports.strictObject({ reply: count, ok: external_exports.literal(false), error: external_exports.string().max(2e3) }),
-  external_exports.strictObject({ push: external_exports.literal("changed"), name: canvasName, rev: count }),
-  external_exports.strictObject({ push: external_exports.literal("deleted"), name: canvasName }),
-  external_exports.strictObject({ push: external_exports.literal("context"), threadId: external_exports.string().nullable(), projectId: external_exports.string().nullable() })
-]);
-var threadRow = external_exports.strictObject({ id: external_exports.string(), title: external_exports.string(), status: external_exports.string() });
-var doc = docSchema;
-var valueSchemas = {
-  open: external_exports.strictObject({ name: external_exports.string(), doc }),
-  list: external_exports.strictObject({ names: external_exports.array(external_exports.string()) }),
-  context: external_exports.strictObject({ threadId: external_exports.string().nullable(), projectId: external_exports.string().nullable() }),
-  threads: external_exports.strictObject({ threads: external_exports.array(threadRow) }),
-  apply: external_exports.strictObject({ doc, added: external_exports.array(external_exports.string()) }),
-  undo: external_exports.union([doc, external_exports.strictObject({ doc })]),
-  redo: external_exports.union([doc, external_exports.strictObject({ doc })]),
-  delete: external_exports.strictObject({ names: external_exports.array(external_exports.string()) }),
-  send: external_exports.strictObject({ sent: external_exports.literal(true) }),
-  pngChunk: external_exports.strictObject({})
-};
-
-// src/bridge.ts
-function parseRequest(message) {
-  const id2 = typeof message === "object" && message !== null && "id" in message && typeof message.id === "number" && Number.isInteger(message.id) && message.id >= 0 ? message.id : null;
-  const result = pageRequestSchema.safeParse(message);
-  if (result.success) return { ok: true, request: result.data };
-  const issue2 = result.error.issues[0];
-  const where = issue2.path.length === 0 ? "" : ` (${issue2.path.map(String).join(" \u203A ")})`;
-  return { ok: false, id: id2, error: `The page sent a request kagan does not understand${where}: ${issue2.message}` };
-}
-
-// src/store.ts
-import { migrate, query, transaction } from "kagan/database";
-var UNDO_DEPTH = 25;
-var CREATE_DIAGRAMS = `CREATE TABLE IF NOT EXISTS diagrams (
-      name TEXT PRIMARY KEY,
-      doc TEXT NOT NULL,
-      history TEXT NOT NULL,
-      future TEXT NOT NULL,
-      updated_at INTEGER NOT NULL
-    )`;
-var migrated = null;
-var chain = Promise.resolve();
-function serial(run) {
-  const next2 = chain.then(run);
-  chain = next2.catch(() => void 0);
-  return next2;
-}
-function ready() {
-  migrated ??= migrate([CREATE_DIAGRAMS]);
-  return migrated;
-}
-async function row(name) {
-  const rows = await query("SELECT doc, history, future FROM diagrams WHERE name = ?", [name]);
-  return rows[0];
-}
-function docOf(found, name) {
-  const parsed = docSchema.safeParse(JSON.parse(found.doc));
-  if (!parsed.success) throw new Error(`canvas "${name}" could not be read: ${parsed.error.issues[0]?.message ?? "bad data"}`);
-  return parsed.data;
-}
-function stepsOf(found, name) {
-  const history = JSON.parse(found.history);
-  const future = JSON.parse(found.future);
-  if (!Array.isArray(history) || !Array.isArray(future)) throw new Error(`canvas "${name}" history is unreadable`);
-  return { history, future };
-}
-async function save(doc2, steps) {
-  await transaction([
-    {
-      sql: `INSERT INTO diagrams (name, doc, history, future, updated_at) VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(name) DO UPDATE SET doc = excluded.doc, history = excluded.history, future = excluded.future, updated_at = excluded.updated_at`,
-      params: [
-        doc2.name,
-        JSON.stringify(doc2),
-        JSON.stringify(steps.history.slice(-UNDO_DEPTH)),
-        JSON.stringify(steps.future.slice(-UNDO_DEPTH)),
-        Date.now()
-      ]
-    }
-  ]);
-}
-async function knownNames() {
-  const rows = await query("SELECT name FROM diagrams ORDER BY updated_at DESC", []);
-  return rows.map((item) => String(item.name));
-}
-async function requireRow(name) {
-  const found = await row(name);
-  if (found === void 0) {
-    const known = await knownNames();
-    throw new Error(
-      `No canvas named "${name}". ${known.length === 0 ? "There are no canvases yet." : `Known canvases: ${known.join(", ")}.`}`
-    );
-  }
-  return { found, doc: docOf(found, name) };
-}
-function listNames() {
-  return serial(async () => {
-    await ready();
-    return knownNames();
-  });
-}
-function open2(name) {
-  return serial(async () => {
-    await ready();
-    const found = await row(name);
-    if (found !== void 0) return docOf(found, name);
-    const doc2 = emptyDoc(name);
-    await save(doc2, { history: [], future: [] });
-    return doc2;
-  });
-}
-function edit(name, ops) {
-  return serial(async () => {
-    await ready();
-    const { found, doc: before } = await requireRow(name);
-    const result = applyOps(before, ops);
-    const steps = stepsOf(found, name);
-    await save(result.doc, { history: [...steps.history, before.elements], future: [] });
-    return { before, after: result.doc, added: result.added };
-  });
-}
-function step(name, direction) {
-  return serial(async () => {
-    await ready();
-    const { found, doc: current } = await requireRow(name);
-    const steps = stepsOf(found, name);
-    const [from, to] = direction === "undo" ? [steps.history, steps.future] : [steps.future, steps.history];
-    const target = from.pop();
-    if (target === void 0) throw new Error(`Nothing to ${direction} on "${current.name}"`);
-    to.push(current.elements);
-    const doc2 = { ...current, rev: current.rev + 1, elements: target };
-    await save(doc2, steps);
-    return doc2;
-  });
-}
-function remove(name) {
-  return serial(async () => {
-    await ready();
-    await transaction([{ sql: "DELETE FROM diagrams WHERE name = ?", params: [name] }]);
-    return knownNames();
-  });
-}
-function read(name) {
-  return serial(async () => {
-    await ready();
-    return (await requireRow(name)).doc;
-  });
 }
 
 // src/text.ts
@@ -20988,12 +20842,330 @@ function normalizeName(name) {
   return name.normalize("NFKC").replace(/[​-‍﻿]/g, "").trim().toLowerCase().replace(/\s+/g, "-").slice(0, 80);
 }
 
-// src/upload.ts
+// src/host/actions.ts
+var NOTE_MAX = 4e3;
+async function runTool(deps2, name, input2) {
+  const { store: store2 } = deps2;
+  if (name === "canvas_read") {
+    if (typeof input2.name !== "string") {
+      const names = await store2.listNames();
+      return names.length === 0 ? "No canvases yet." : names.join("\n");
+    }
+    return dump(await store2.read(normalizeName(input2.name)));
+  }
+  if (name === "canvas_edit") {
+    if (typeof input2.name !== "string" || input2.name.trim() === "") throw new Error("canvas_edit needs a name");
+    const result = await store2.edit(normalizeName(input2.name), parseOps(input2.ops));
+    await deps2.announce(result.after);
+    return changes(result.before, result.after, result.added);
+  }
+  throw new Error(`Unknown tool ${name}`);
+}
+async function runCli(deps2, command, argv) {
+  const usage = "Usage: kg canvas list\n       kg canvas show <name>";
+  try {
+    if (command === "list" && argv.length === 0) {
+      const names = await deps2.store.listNames();
+      return { exitCode: 0, stdout: names.length === 0 ? "No canvases yet." : names.join("\n") };
+    }
+    if (command === "show" && argv.length > 0) {
+      return { exitCode: 0, stdout: dump(await deps2.store.read(normalizeName(argv.join(" ")))) };
+    }
+    return { exitCode: 1, stderr: usage };
+  } catch (error62) {
+    return { exitCode: 1, stderr: errorMessage(error62) };
+  }
+}
+async function runPage(deps2, request, context2) {
+  const { store: store2 } = deps2;
+  switch (request.call) {
+    case "open": {
+      const name = normalizeName(request.name ?? await deps2.defaultName(request.threadId ?? context2.threadId));
+      return { name, doc: await store2.open(name) };
+    }
+    case "list":
+      return { names: await store2.listNames() };
+    case "context":
+      return { threadId: context2.threadId ?? null, projectId: context2.projectId ?? null };
+    case "apply": {
+      const result = await store2.edit(normalizeName(request.name), parseOps(request.ops));
+      await deps2.announce(result.after);
+      return { doc: result.after, added: result.added };
+    }
+    case "undo":
+    case "redo": {
+      const doc2 = await store2.step(normalizeName(request.name), request.call);
+      await deps2.announce(doc2);
+      return { doc: doc2 };
+    }
+    case "delete": {
+      const name = normalizeName(request.name);
+      const names = await store2.remove(name);
+      return { names };
+    }
+    case "threads":
+      return { threads: await deps2.threads(request.threadId) };
+    case "send": {
+      if (request.note.length > NOTE_MAX) throw new Error(`The note is longer than ${NOTE_MAX} characters.`);
+      const doc2 = await store2.read(normalizeName(request.name));
+      await deps2.send(request.threadId, shareText(doc2, request.note));
+      return { sent: true };
+    }
+    case "pngChunk": {
+      const base643 = deps2.png.accept(request.upload, request.index, request.last, request.data);
+      if (base643 !== null) deps2.writePng(base643);
+      return {};
+    }
+  }
+}
+
+// src/protocol.ts
+var PANEL_ID = "canvas";
+var PNG_CHUNK_CHARS = 512 * 1024;
+var PNG_MAX_BYTES = 8 * 1024 * 1024;
+var count = external_exports.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+var canvasName = external_exports.string().min(1).max(200);
+var threadId = external_exports.string().min(1).max(200);
+var note = external_exports.string().max(4e3);
+var pngData = external_exports.string().min(1).max(PNG_CHUNK_CHARS);
+var pageRequestSchema = external_exports.discriminatedUnion("call", [
+  external_exports.strictObject({ id: count, call: external_exports.literal("open"), threadId: threadId.optional(), name: canvasName.optional() }),
+  external_exports.strictObject({ id: count, call: external_exports.literal("list") }),
+  external_exports.strictObject({ id: count, call: external_exports.literal("context") }),
+  external_exports.strictObject({ id: count, call: external_exports.literal("apply"), name: canvasName, ops: external_exports.array(opSchema).min(1).max(500) }),
+  external_exports.strictObject({ id: count, call: external_exports.literal("undo"), name: canvasName }),
+  external_exports.strictObject({ id: count, call: external_exports.literal("redo"), name: canvasName }),
+  external_exports.strictObject({ id: count, call: external_exports.literal("delete"), name: canvasName }),
+  external_exports.strictObject({ id: count, call: external_exports.literal("threads"), threadId }),
+  external_exports.strictObject({ id: count, call: external_exports.literal("send"), name: canvasName, threadId, note }),
+  external_exports.strictObject({
+    id: count,
+    call: external_exports.literal("pngChunk"),
+    upload: external_exports.string().min(1).max(64),
+    index: count,
+    last: external_exports.boolean(),
+    data: pngData
+  })
+]);
+var pluginMessageSchema = external_exports.union([
+  external_exports.strictObject({ reply: count, ok: external_exports.literal(true), value: external_exports.unknown() }),
+  external_exports.strictObject({ reply: count, ok: external_exports.literal(false), error: external_exports.string().max(2e3) }),
+  external_exports.strictObject({ push: external_exports.literal("changed"), name: canvasName, rev: count }),
+  external_exports.strictObject({ push: external_exports.literal("deleted"), name: canvasName }),
+  external_exports.strictObject({ push: external_exports.literal("context"), threadId: external_exports.string().nullable(), projectId: external_exports.string().nullable() })
+]);
+var threadRow = external_exports.strictObject({ id: external_exports.string(), title: external_exports.string(), status: external_exports.string() });
+var doc = docSchema;
+var valueSchemas = {
+  open: external_exports.strictObject({ name: external_exports.string(), doc }),
+  list: external_exports.strictObject({ names: external_exports.array(external_exports.string()) }),
+  context: external_exports.strictObject({ threadId: external_exports.string().nullable(), projectId: external_exports.string().nullable() }),
+  threads: external_exports.strictObject({ threads: external_exports.array(threadRow) }),
+  apply: external_exports.strictObject({ doc, added: external_exports.array(external_exports.string()) }),
+  undo: external_exports.strictObject({ doc }),
+  redo: external_exports.strictObject({ doc }),
+  delete: external_exports.strictObject({ names: external_exports.array(external_exports.string()) }),
+  send: external_exports.strictObject({ sent: external_exports.literal(true) }),
+  pngChunk: external_exports.strictObject({})
+};
+
+// src/host/bridge.ts
+function parseRequest(message) {
+  const id2 = typeof message === "object" && message !== null && "id" in message && typeof message.id === "number" && Number.isInteger(message.id) && message.id >= 0 ? message.id : null;
+  const result = pageRequestSchema.safeParse(message);
+  if (result.success) return { ok: true, request: result.data };
+  const issue2 = result.error.issues[0];
+  const where = issue2.path.length === 0 ? "" : ` (${issue2.path.map(String).join(" \u203A ")})`;
+  return { ok: false, id: id2, error: `The page sent a request kagan does not understand${where}: ${issue2.message}` };
+}
+
+// src/host/names.ts
+var slug = (label) => label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "canvas";
+async function defaultName(threadId2, ports) {
+  if (threadId2 === void 0) return "canvas";
+  const thread = await ports.thread(threadId2);
+  try {
+    return slug((await ports.project(thread.projectId)).name);
+  } catch (cause) {
+    const known = await ports.projects();
+    if (known.some((project2) => project2.id === thread.projectId)) throw cause;
+    return slug(thread.projectId.replace(/^proj_/, ""));
+  }
+}
+
+// src/host/sql.ts
+var CREATE_DIAGRAMS = `CREATE TABLE IF NOT EXISTS diagrams (
+      name TEXT PRIMARY KEY,
+      doc TEXT NOT NULL,
+      history TEXT NOT NULL,
+      future TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    )`;
+function createSqlRows(db) {
+  return {
+    migrate: () => db.migrate([CREATE_DIAGRAMS]),
+    async get(name) {
+      const rows = await db.query("SELECT doc, history, future FROM diagrams WHERE name = ?", [name]);
+      return rows[0];
+    },
+    async names() {
+      const rows = await db.query("SELECT name FROM diagrams ORDER BY updated_at DESC", []);
+      return rows.map((item) => String(item.name));
+    },
+    save(name, doc2, history, future, updatedAt) {
+      return db.transaction([
+        {
+          sql: `INSERT INTO diagrams (name, doc, history, future, updated_at) VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(name) DO UPDATE SET doc = excluded.doc, history = excluded.history, future = excluded.future, updated_at = excluded.updated_at`,
+          params: [name, doc2, history, future, updatedAt]
+        }
+      ]);
+    },
+    remove(names) {
+      return db.transaction(names.map((name) => ({ sql: "DELETE FROM diagrams WHERE name = ?", params: [name] })));
+    }
+  };
+}
+
+// src/host/rows.ts
+function json2(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return void 0;
+  }
+}
+function docOf(found, name) {
+  const parsed = docSchema.safeParse(json2(found.doc));
+  if (!parsed.success) throw new Error(`canvas "${name}" could not be read: ${parsed.error.issues[0]?.message ?? "bad data"}`);
+  return parsed.data;
+}
+function stepsOf(found) {
+  const steps = external_exports.array(external_exports.array(elementSchema));
+  const history = steps.safeParse(json2(found.history));
+  const future = steps.safeParse(json2(found.future));
+  return { history: history.success ? history.data : [], future: future.success ? future.data : [] };
+}
+
+// src/host/store.ts
+var UNDO_DEPTH = 25;
+function createStore(rows) {
+  let migrated = null;
+  let chain = Promise.resolve();
+  function serial(run) {
+    const next2 = chain.then(run);
+    chain = next2.catch(() => void 0);
+    return next2;
+  }
+  function ready() {
+    migrated ??= rows.migrate().catch((error62) => {
+      migrated = null;
+      throw error62;
+    });
+    return migrated;
+  }
+  async function save(doc2, steps) {
+    await rows.save(
+      doc2.name,
+      JSON.stringify(doc2),
+      JSON.stringify(steps.history.slice(-UNDO_DEPTH)),
+      JSON.stringify(steps.future.slice(-UNDO_DEPTH)),
+      Date.now()
+    );
+  }
+  async function requireRow(name) {
+    const found = await rows.get(name);
+    if (found === void 0) {
+      const known = await rows.names();
+      throw new Error(
+        `No canvas named "${name}". ${known.length === 0 ? "There are no canvases yet." : `Known canvases: ${known.join(", ")}.`}`
+      );
+    }
+    return { found, doc: docOf(found, name) };
+  }
+  function listNames() {
+    return serial(async () => {
+      await ready();
+      return rows.names();
+    });
+  }
+  function open2(name) {
+    return serial(async () => {
+      await ready();
+      const found = await rows.get(name);
+      if (found !== void 0) return docOf(found, name);
+      const doc2 = emptyDoc(name);
+      await save(doc2, { history: [], future: [] });
+      return doc2;
+    });
+  }
+  function edit(name, ops) {
+    return serial(async () => {
+      await ready();
+      const { found, doc: before } = await requireRow(name);
+      const result = applyOps(before, ops);
+      const steps = stepsOf(found);
+      await save(result.doc, { history: [...steps.history, before.elements], future: [] });
+      return { before, after: result.doc, added: result.added };
+    });
+  }
+  function step(name, direction) {
+    return serial(async () => {
+      await ready();
+      const { found, doc: current } = await requireRow(name);
+      const steps = stepsOf(found);
+      const [from, to] = direction === "undo" ? [steps.history, steps.future] : [steps.future, steps.history];
+      const target = from.pop();
+      if (target === void 0) throw new Error(`Nothing to ${direction} on "${current.name}"`);
+      to.push(current.elements);
+      const doc2 = { ...current, rev: current.rev + 1, elements: target };
+      await save(doc2, steps);
+      return doc2;
+    });
+  }
+  function remove(name) {
+    return serial(async () => {
+      await ready();
+      await rows.remove([.../* @__PURE__ */ new Set([name, normalizeName(name)])]);
+      return rows.names();
+    });
+  }
+  function read(name) {
+    return serial(async () => {
+      await ready();
+      return (await requireRow(name)).doc;
+    });
+  }
+  return { listNames, open: open2, edit, step, remove, read };
+}
+
+// src/host/upload.ts
 var MAX_CHARS = Math.ceil(PNG_MAX_BYTES * 4 / 3) + 4;
+var UPLOAD_TTL_MS = 6e4;
+var MAX_PENDING_UPLOADS = 4;
 var PngUploads = class {
   pending = /* @__PURE__ */ new Map();
+  now;
+  constructor(now = Date.now) {
+    this.now = now;
+  }
+  sweep() {
+    const cutoff = this.now() - UPLOAD_TTL_MS;
+    for (const [upload, current] of this.pending) if (current.updatedAt < cutoff) this.pending.delete(upload);
+  }
+  /** A new upload needs a slot. A continuation keeps the one it already has. */
+  makeRoom() {
+    while (this.pending.size >= MAX_PENDING_UPLOADS) {
+      const oldest = [...this.pending].sort((a, b) => a[1].updatedAt - b[1].updatedAt)[0];
+      if (oldest === void 0) break;
+      this.pending.delete(oldest[0]);
+    }
+  }
   accept(upload, index, last, data) {
-    const current = this.pending.get(upload) ?? { parts: [], chars: 0, next: 0 };
+    this.sweep();
+    const found = this.pending.get(upload);
+    if (found === void 0) this.makeRoom();
+    const current = found ?? { parts: [], chars: 0, next: 0, updatedAt: this.now() };
     if (index !== current.next) {
       this.pending.delete(upload);
       throw new Error(`A picture piece arrived out of order: expected piece ${current.next}, got ${index}.`);
@@ -21001,6 +21173,7 @@ var PngUploads = class {
     current.parts.push(data);
     current.chars += data.length;
     current.next += 1;
+    current.updatedAt = this.now();
     if (current.chars > MAX_CHARS) {
       this.pending.delete(upload);
       throw new Error("The picture is larger than 8 MiB.");
@@ -21018,8 +21191,17 @@ var PngUploads = class {
 };
 
 // src/main.ts
-var NOTE_MAX = 4e3;
-var pngUploads = new PngUploads();
+var png = new PngUploads();
+var store = createStore(createSqlRows({ migrate, query, transaction }));
+var deps = {
+  store,
+  png,
+  announce: async (doc2) => tell({ push: "changed", name: doc2.name, rev: doc2.rev }),
+  send: (threadId2, text) => pasteIntoThread(threadId2, text),
+  defaultName: (threadId2) => defaultName(threadId2, { thread: get, project, projects }),
+  threads: threadRows,
+  writePng: writeClipboardPng
+};
 var Plugin = class extends View {
   init(_props, cx) {
     cx.spawn(async () => {
@@ -21027,7 +21209,7 @@ var Plugin = class extends View {
         const job = await next();
         handle(job).then(
           (value) => reply(job.id, value),
-          (error62) => fail(job.id, error62 instanceof Error ? error62.message : String(error62))
+          (error62) => fail(job.id, errorMessage(error62))
         );
       }
     });
@@ -21068,108 +21250,22 @@ async function handle(job) {
 async function tool(job) {
   const input2 = job.input !== null && typeof job.input === "object" ? job.input : {};
   try {
-    if (job.name === "canvas_read") {
-      if (typeof input2.name !== "string") {
-        const names = await listNames();
-        return { text: names.length === 0 ? "No canvases yet." : names.join("\n") };
-      }
-      return { text: dump(await read(normalizeName(input2.name))) };
-    }
-    if (job.name === "canvas_edit") {
-      if (typeof input2.name !== "string" || input2.name.trim() === "") throw new Error("canvas_edit needs a name");
-      const ops = parseOps(input2.ops);
-      const name = normalizeName(input2.name);
-      const result = await edit(name, ops);
-      await announce(result.after);
-      return { text: changes(result.before, result.after, result.added) };
-    }
-    throw new Error(`Unknown tool ${String(job.name)}`);
+    return { text: await runTool(deps, String(job.name), input2) };
   } catch (error62) {
-    return { text: error62 instanceof Error ? error62.message : String(error62), isError: true };
+    return { text: errorMessage(error62), isError: true };
   }
 }
 async function cli(job) {
   const argv = Array.isArray(job.argv) ? job.argv.map(String) : [];
-  const usage = "Usage: kg canvas list\n       kg canvas show <name>";
-  try {
-    if (job.command === "list" && argv.length === 0) {
-      const names = await listNames();
-      return { exitCode: 0, stdout: names.length === 0 ? "No canvases yet." : names.join("\n") };
-    }
-    if (job.command === "show" && argv.length > 0) {
-      return { exitCode: 0, stdout: dump(await read(normalizeName(argv.join(" ")))) };
-    }
-    return { exitCode: 1, stderr: usage };
-  } catch (error62) {
-    return { exitCode: 1, stderr: error62 instanceof Error ? error62.message : String(error62) };
-  }
-}
-async function announce(doc2) {
-  await tell({ push: "changed", name: doc2.name, rev: doc2.rev });
+  return runCli(deps, String(job.command), argv);
 }
 async function answer(request) {
   try {
-    const value = await call(request);
+    const value = await runPage(deps, request, context());
     await tell({ reply: request.id, ok: true, value: value ?? {} });
   } catch (error62) {
-    await tell({ reply: request.id, ok: false, error: error62 instanceof Error ? error62.message : String(error62) });
+    await tell({ reply: request.id, ok: false, error: errorMessage(error62) });
   }
-}
-async function call(request) {
-  switch (request.call) {
-    case "open": {
-      const name = normalizeName(request.name ?? await defaultName(request.threadId ?? context().threadId));
-      return { name, doc: await open2(name) };
-    }
-    case "list":
-      return { names: await listNames() };
-    case "context": {
-      const current = context();
-      return { threadId: current.threadId ?? null, projectId: current.projectId ?? null };
-    }
-    case "apply": {
-      const ops = parseOps(request.ops);
-      const result = await edit(normalizeName(request.name), ops);
-      await announce(result.after);
-      return { doc: result.after, added: result.added };
-    }
-    case "undo":
-    case "redo": {
-      const doc2 = await step(normalizeName(request.name), request.call);
-      await announce(doc2);
-      return { doc: doc2 };
-    }
-    case "delete": {
-      const name = normalizeName(request.name);
-      const names = await remove(name);
-      await tell({ push: "deleted", name });
-      return { names };
-    }
-    case "threads":
-      return { threads: await threadRows(request.threadId) };
-    case "send": {
-      if (request.note.length > NOTE_MAX) throw new Error(`The note is longer than ${NOTE_MAX} characters.`);
-      const doc2 = await read(normalizeName(request.name));
-      await pasteIntoThread(request.threadId, shareText(doc2, request.note));
-      return { sent: true };
-    }
-    case "pngChunk":
-      return pngChunk(request);
-  }
-}
-function pngChunk(request) {
-  const base643 = pngUploads.accept(request.upload, request.index, request.last, request.data);
-  if (base643 !== null) writeClipboardPng(base643);
-  return {};
-}
-async function defaultName(threadId2) {
-  if (threadId2 === void 0) return "canvas";
-  const thread = await get(threadId2);
-  const label = await project(thread.projectId).then(
-    (found) => found.name,
-    () => thread.projectId.replace(/^proj_/, "")
-  );
-  return label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "canvas";
 }
 async function threadRows(threadId2) {
   const current = await get(threadId2);

@@ -51,8 +51,9 @@ clears one, or deletes one.
 A box grows taller as you type its label, so the label always fits. An arrow
 drawn from one box to another sticks to both. It routes on right angles around
 the other boxes and text, keeps off the lines other arrows take, and follows the
-boxes when they move. An arrow label sits on a clear stretch of its own line, or
-stays hidden when the line has no room for it. Deleting a box deletes its arrows.
+boxes when they move. An arrow label sits on a clear stretch of its own line. When nothing is
+clear it takes the least-bad stretch and the edit says it covers another
+arrow; when there is no room at all it stays hidden. Deleting a box deletes its arrows.
 
 ## Agents and the CLI
 
@@ -80,14 +81,23 @@ Drawings saved by version 0.1.6 open as they were.
 
 ## Files
 
-- `src/main.ts`: the plugin's job loop, the agent tools, the CLI, and the messages to the page.
-- `src/store.ts`: saved canvases in the plugin database, and undo.
+- `src/main.ts`: the plugin's job loop and the calls into kagan.
+- `src/host/actions.ts`: the agent tools, the CLI, and the page's calls, with the host passed in.
+- `src/host/store.ts`, `rows.ts`, `sql.ts`: saved canvases, their row contract, undo, and the SQLite adapter.
+- `src/host/names.ts`, `bridge.ts`, `upload.ts`: the default canvas name, page-message checks, and PNG pieces.
 - `src/text.ts`: the text agents read, and the diff an edit returns.
-- `src/model.ts`, `layout.ts`, `route.ts`: elements, ops, text measurement, and arrow routes.
-- `src/clip.ts`, `export.ts`, `gesture.ts`, `sketch.ts`: copy and paste, SVG export, zoom, and the hand-drawn look.
-- `src/protocol.ts`: the messages between the page and the plugin.
-- `ui/`: the panel page, built from `src/ui/`.
+- `src/model.ts`: elements, ops, and the document schema.
+- `src/diagram.ts`, `layout.ts`, `route.ts`: what agents read, text measurement, and arrow routes.
+- `src/clip.ts`, `export.ts`: copy and paste, and SVG export.
+- `src/ui/gesture.ts`, `sketch.ts`: zoom and fit, and the hand-drawn look.
+- `src/protocol.ts`: the messages between the page and the plugin, and their checks.
+- `src/ui/`: the panel page, its document session, send bar, renderers, and geometry.
 - `schemas/`: the input schemas kagan checks tool calls against.
 - `kagan.json`: the manifest.
+- `PORT.md`: what moved from the bb plugin, what differs, and what cannot move.
 
-Run `npm run check` for the typecheck, the tests, and both builds.
+Run `npm run check` for the typecheck, the tests, and both builds. The tests use
+`node --test`; `test/register-tsx.mjs` teaches it the panel's JSX. `npm run
+test:ui` drives the built page in Chromium; it needs Playwright (`npm i -D
+playwright`) or `CANVAS_UI_PLAYWRIGHT` set to its `index.mjs`, and writes
+screenshots under `test/ui/screenshots/`.

@@ -1,5 +1,5 @@
 import type { Element, Op } from "../model.ts";
-import { arrowPoints } from "../model.ts";
+import { arrowPoints } from "../diagram.ts";
 import { translated } from "../clip.ts";
 import { textBounds, type Point, type Rect } from "../layout.ts";
 import { MAX_SCALE, MIN_SCALE } from "../constants.ts";

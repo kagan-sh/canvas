@@ -62,6 +62,15 @@ test("an arrow still takes from, to and a valid patch", () => {
   assert.equal(arrow.type === "arrow" && arrow.label, "jobs");
 });
 
+test("an update cannot point both arrow ends at one box", () => {
+  const doc = applyOps(emptyDoc("board"), [
+    { op: "add", as: "a", element: { type: "box", x: 0, y: 0, w: 100, h: 80 } },
+    { op: "add", as: "b", element: { type: "box", x: 300, y: 0, w: 100, h: 80 } },
+    { op: "add", element: { type: "arrow", x1: 100, y1: 40, x2: 300, y2: 40, from: "a", to: "b" } },
+  ]).doc;
+  assert.throws(() => applyOps(doc, [{ op: "update", id: "a3", patch: { to: "b1" } }]), /two different boxes/);
+});
+
 test("a malformed batch is refused with one plain message", () => {
   assert.throws(() => parseOps([{ op: "explode" }]), /That change is not valid/);
   assert.throws(() => parseOps([]), /not valid/);

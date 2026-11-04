@@ -1,4 +1,5 @@
-import { contentBounds, exportText, layoutNotes, layoutReport, type Doc } from "./model.ts";
+import { contentBounds, exportText, layoutNotes, layoutReport } from "./diagram.ts";
+import type { Doc } from "./model.ts";
 
 /** Where the drawing sits, so an agent can place new work beside it. */
 export function summary(doc: Doc): string {

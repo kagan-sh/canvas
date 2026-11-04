@@ -4,7 +4,8 @@
   "properties": {
     "name": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "description": "Diagram name. Omit to list the canvases."
     }
   },
   "additionalProperties": false

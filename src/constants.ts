@@ -35,38 +35,6 @@ export const COLOR_CSS: Record<Theme, Record<Color, string>> = {
   },
 };
 
-/** Excalidraw's UI tokens, read off excalidraw.com. */
-export const THEME_VARS: Record<Theme, Record<string, string>> = {
-  light: {
-    "--ex-canvas": "#ffffff",
-    "--ex-island": "#ffffff",
-    "--ex-surface-low": "#ececf4",
-    "--ex-hover": "#f1f0ff",
-    "--ex-primary": "#6965db",
-    "--ex-primary-darker": "#5b57d1",
-    "--ex-primary-light": "#e3e2fe",
-    "--ex-on-primary-container": "#030064",
-    "--ex-selection": "#6965db",
-    "--ex-text": "#1b1b1f",
-    "--ex-muted": "#999999",
-    "--ex-hint": "#b8b8b8",
-  },
-  dark: {
-    "--ex-canvas": "#121212",
-    "--ex-island": "#232329",
-    "--ex-surface-low": "hsl(240, 8%, 15%)",
-    "--ex-hover": "#2e2d39",
-    "--ex-primary": "#a8a5ff",
-    "--ex-primary-darker": "#b2aeff",
-    "--ex-primary-light": "#4f4d6f",
-    "--ex-on-primary-container": "#e0dfff",
-    "--ex-selection": "#b4b0ff",
-    "--ex-text": "#e3e3e8",
-    "--ex-muted": "#7a7a7a",
-    "--ex-hint": "#5c5c5c",
-  },
-};
-
 /** Excalidraw's element defaults: "artist" sloppiness, medium stroke, its arrowhead. */
 export const ROUGHNESS = 1;
 export const STROKE_WIDTH = 2;
@@ -74,9 +42,6 @@ export const ARROWHEAD_SIZE = 25;
 export const ARROWHEAD_ANGLE = 20;
 
 export const CANVAS_CHANGED = "canvas-changed";
-/** Another plugin asked a window showing the thread to open its Canvas tab on one canvas. */
-export const CANVAS_SHOW = "canvas-show";
-export const PANEL_ACTION_ID = "canvas";
 
 /** Type that fits inside a box instead of spilling out of it. */
 export const LABEL_FONT = 18;

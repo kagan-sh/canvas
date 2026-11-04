@@ -2,8 +2,8 @@ import rough from "roughjs";
 import type { Options } from "roughjs/bin/core";
 import getStroke from "perfect-freehand";
 
-import { ARROWHEAD_ANGLE, ARROWHEAD_SIZE, ROUGHNESS, STROKE_WIDTH } from "./constants.ts";
-import type { Point } from "./layout.ts";
+import { ARROWHEAD_ANGLE, ARROWHEAD_SIZE, ROUGHNESS, STROKE_WIDTH } from "../constants.ts";
+import type { Point } from "../layout.ts";
 
 /** One stroke of a hand-drawn shape. `fill` is set only for the filled pen outline. */
 export type SketchPath = { d: string; fill?: string; stroke?: string; strokeWidth?: number };

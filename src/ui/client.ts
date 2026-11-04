@@ -1,6 +1,6 @@
 import type { z } from "zod";
 
-import { pluginMessageSchema, type PageRequest, type PluginMessage } from "../protocol.ts";
+import { pluginMessageSchema, valueSchemas, type PageRequest, type PluginMessage } from "../protocol.ts";
 
 declare global {
   interface Window {
@@ -23,8 +23,6 @@ type Waiting = {
 };
 
 const waiting = new Map<number, Waiting>();
-const listeners = new Set<(push: Push) => void>();
-let nextId = 1;
 
 function settle(id: number): Waiting | undefined {
   const entry = waiting.get(id);
@@ -34,31 +32,42 @@ function settle(id: number): Waiting | undefined {
   return entry;
 }
 
-window.addEventListener("kagan", (event) => {
-  const detail = (event as CustomEvent<unknown>).detail;
-  const parsed = pluginMessageSchema.safeParse(detail);
-  if (!parsed.success) {
-    // A reply that does not fit fails its call at once. Anything else is dropped.
-    const id = typeof detail === "object" && detail !== null && "reply" in detail ? detail.reply : undefined;
-    if (typeof id === "number") settle(id)?.reject(new Error(UNDERSTOOD));
-    console.warn("canvas: dropped a message from kagan that does not fit the protocol", parsed.error.issues[0]?.message);
-    return;
-  }
-  const message = parsed.data;
-  if ("reply" in message) {
-    const entry = settle(message.reply);
-    if (entry === undefined) return;
-    if (!message.ok) return entry.reject(new Error(message.error));
-    const checked = entry.schema.safeParse(message.value);
-    if (checked.success) entry.resolve(checked.data);
-    else entry.reject(new Error(UNDERSTOOD));
-  } else if ("push" in message) {
-    for (const listener of listeners) listener(message);
-  }
-});
+const listeners = new Set<(push: Push) => void>();
+let nextId = 1;
+let connected = false;
 
-export function call<T>(request: Call, schema: z.ZodType<T>): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
+/** Wires the page to the plugin's messages. The page calls it before rendering; call() also ensures it. */
+export function connect(): void {
+  if (connected || typeof window === "undefined") return;
+  connected = true;
+  window.addEventListener("kagan", (event) => {
+    const detail = (event as CustomEvent<unknown>).detail;
+    const parsed = pluginMessageSchema.safeParse(detail);
+    if (!parsed.success) {
+      // A reply that does not fit fails its call at once. Anything else is dropped.
+      const id = typeof detail === "object" && detail !== null && "reply" in detail ? detail.reply : undefined;
+      if (typeof id === "number") settle(id)?.reject(new Error(UNDERSTOOD));
+      console.warn("canvas: dropped a message from kagan that does not fit the protocol", parsed.error.issues[0]?.message);
+      return;
+    }
+    const message = parsed.data;
+    if ("reply" in message) {
+      const entry = settle(message.reply);
+      if (entry === undefined) return;
+      if (!message.ok) return entry.reject(new Error(message.error));
+      const checked = entry.schema.safeParse(message.value);
+      if (checked.success) entry.resolve(checked.data);
+      else entry.reject(new Error(UNDERSTOOD));
+    } else if ("push" in message) {
+      for (const listener of listeners) listener(message);
+    }
+  });
+}
+
+export function call<R extends Call>(request: R): Promise<z.infer<(typeof valueSchemas)[R["call"]]>> {
+  const schema = valueSchemas[request.call] as z.ZodType;
+  connect();
+  return new Promise((resolve, reject) => {
     const id = nextId++;
     const fail = (cause: unknown) => {
       const entry = settle(id);

@@ -1,7 +1,10 @@
 import { useEffect, useState } from "react";
 import type { Theme } from "../constants.ts";
 
-const read = (): Theme => (getComputedStyle(document.documentElement).colorScheme.includes("dark") ? "dark" : "light");
+/** The host's `color-scheme` says which palette to use. */
+export const themeFrom = (colorScheme: string): Theme => (colorScheme.includes("dark") ? "dark" : "light");
+
+const read = (): Theme => themeFrom(getComputedStyle(document.documentElement).colorScheme);
 
 /** Follows the host's `color-scheme`, which kagan rewrites live when the person changes theme or mode. */
 export function useTheme(): Theme {

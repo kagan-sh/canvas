@@ -2,3 +2,4 @@ gpui-kit.d.ts
 kagan.d.ts
 node_modules/
 .DS_Store
+test/ui/screenshots/

@@ -11,7 +11,7 @@ export type Note = { ids: string[]; text: string };
 
 export type Layout = {
   routes: Map<string, Point[]>;
-  /** Where each shown arrow label sits. A label with no clean spot is missing here. */
+  /** Where each shown arrow label sits. No acceptable spot leaves it out; a label that must cover another arrow is kept here and reported. */
   labels: Map<string, Rect>;
   notes: Note[];
   /** Routes an arrow that is not on the canvas yet, such as the one being drawn. */
@@ -134,7 +134,8 @@ class Heap {
   get size() {
     return this.f.length;
   }
-  peek() {
+  /** The smallest priority; the state stays in the heap. */
+  peekPriority() {
     return this.f[0]!;
   }
   push(f: number, s: number) {
@@ -153,7 +154,8 @@ class Heap {
     fs[i] = f;
     ss[i] = s;
   }
-  pop(): number {
+  /** Removes and returns the state with the smallest priority. */
+  popState(): number {
     const fs = this.f;
     const ss = this.s;
     const top = ss[0]!;
@@ -193,10 +195,18 @@ function simplify(points: Point[]): Point[] {
   return out.length >= 2 ? out : [points[0]!, points[points.length - 1]!];
 }
 
-/** Cheapest right-angle route between two boxes over a grid of lanes through the gaps
- * (orthogonal connector routing, as in libavoid). Entering a box or text, or riding a line
- * already taken, costs so much that it only happens when nothing else gets through. */
-function routeBetween(a: Rect, b: Rect, others: Obstacle[], used: Run[]): Point[] {
+type Grid = {
+  xs: number[];
+  ys: number[];
+  nx: number;
+  ny: number;
+  approach(p: Port): number | null;
+  stubCost(p: Port, node: number): number;
+  edgeCost(i: number, j: number, d: Dir): number;
+};
+
+/** The lane grid a route may use: box edges, gaps, and the ports straight out of each box. */
+function buildGrid(a: Rect, b: Rect, others: Obstacle[], used: Run[]): { grid: Grid; starts: Port[]; ends: Port[] } {
   const obstacles = [{ id: "", rect: a, cost: BOX_HIT }, { id: "", rect: b, cost: BOX_HIT }, ...others];
   const xKind = new Map<number, number>();
   const yKind = new Map<number, number>();
@@ -315,6 +325,16 @@ function routeBetween(a: Rect, b: Rect, others: Obstacle[], used: Run[]): Point[
     return vCost[k]!;
   };
 
+  return { grid: { xs, ys, nx, ny, approach, stubCost, edgeCost }, starts, ends };
+}
+
+/** Cheapest right-angle route between two boxes over the lane grid (orthogonal connector
+ * routing, as in libavoid). Entering a box or text, or riding a line already taken, costs so
+ * much that it only happens when nothing else gets through. */
+function routeBetween(a: Rect, b: Rect, others: Obstacle[], used: Run[]): Point[] {
+  const { grid, starts, ends } = buildGrid(a, b, others, used);
+  const { xs, ys, nx, ny, approach, stubCost, edgeCost } = grid;
+
   const goals = new Map<number, Array<{ port: Port; cost: number }>>();
   for (const port of ends) {
     const node = approach(port);
@@ -349,8 +369,8 @@ function routeBetween(a: Rect, b: Rect, others: Obstacle[], used: Run[]): Point[
   let best = Infinity;
   let bestState = -1;
   let bestPort: Port | null = null;
-  while (heap.size > 0 && heap.peek() < best) {
-    const s = heap.pop();
+  while (heap.size > 0 && heap.peekPriority() < best) {
+    const s = heap.popState();
     const node = s >> 2;
     const d = (s & 3) as Dir;
     const here = g[s]!;
@@ -384,6 +404,12 @@ function routeBetween(a: Rect, b: Rect, others: Obstacle[], used: Run[]): Point[
     const to = { x: b.x + b.w / 2, y: b.y + b.h / 2 };
     return [clipToBox(a, from, to), clipToBox(b, to, from)];
   }
+  return routeFrom(grid, parent, bestState, startOf, bestPort);
+}
+
+/** Walks the parent chain back into points, from the start port to the goal port. */
+function routeFrom(grid: Grid, parent: Int32Array, bestState: number, startOf: Map<number, Port>, bestPort: Port): Point[] {
+  const { xs, ys, nx } = grid;
   const nodes: Point[] = [];
   let s = bestState;
   let first = s;
@@ -436,6 +462,56 @@ function segmentEnters(p: Point, q: Point, r: Rect): boolean {
 function pathEnters(points: Point[], r: Rect): boolean {
   for (let i = 0; i < points.length - 1; i++) if (segmentEnters(points[i]!, points[i + 1]!, r)) return true;
   return false;
+}
+
+type LabelChoice = { rect: Rect | null; over: string | null; need: number };
+
+/** The best spot for one arrow's label: clear of boxes, text, and other labels, and clear of
+ * every other arrow when one exists. Returns the least-bad spot and the arrow it covers, or
+ * null and the length of clear line the caller must widen if nothing fits. */
+function placeLabel(
+  arrow: Arrow,
+  path: Point[],
+  runs: Map<string, Run[]>,
+  arrowIds: string[],
+  blockers: Rect[],
+  placed: Rect[],
+): LabelChoice {
+  const w = textWidth(arrow.label!, ARROW_FONT) + LABEL_PAD;
+  const heads = arrow.heads ?? "end";
+  const headAtStart = heads === "start" || heads === "both";
+  const headAtEnd = heads === "end" || heads === "both";
+  const segments = path.slice(0, -1).map((p, i) => ({ p, q: path[i + 1]!, i }));
+  segments.sort((s, t) => Math.hypot(t.q.x - t.p.x, t.q.y - t.p.y) - Math.hypot(s.q.x - s.p.x, s.q.y - s.p.y));
+  let clean: Rect | null = null;
+  let covering: { rect: Rect; over: string } | null = null;
+  for (const { p, q, i } of segments) {
+    const length = Math.hypot(q.x - p.x, q.y - p.y);
+    const horizontal = Math.abs(q.x - p.x) >= Math.abs(q.y - p.y);
+    const startRoom = i === 0 && headAtStart ? LABEL_HEAD_END : LABEL_END;
+    const endRoom = i === path.length - 2 && headAtEnd ? LABEL_HEAD_END : LABEL_END;
+    const span = horizontal ? w : LABEL_H;
+    const slack = length - span - startRoom - endRoom;
+    if (slack < 0) continue;
+    const centre = startRoom + span / 2 + slack / 2;
+    const offsets = [0];
+    for (let k = LABEL_STEP; k <= slack / 2; k += LABEL_STEP) offsets.push(-k, k);
+    for (const offset of offsets) {
+      const t = (centre + offset) / length;
+      const at = { x: p.x + (q.x - p.x) * t, y: p.y + (q.y - p.y) * t };
+      const rect = { x: at.x - w / 2, y: at.y - LABEL_H / 2, w, h: LABEL_H };
+      if (blockers.some((b) => intersects(rect, b)) || placed.some((b) => intersects(rect, inflate(b, LABEL_CLEAR)))) continue;
+      const over = arrowIds.find((id) => id !== arrow.id && runs.get(id)!.some((run) => runCrosses(run, rect)));
+      if (over === undefined) {
+        clean = rect;
+        break;
+      }
+      covering ??= { rect, over };
+    }
+    if (clean !== null) break;
+  }
+  const need = Math.ceil(w + LABEL_END + (headAtEnd || headAtStart ? LABEL_HEAD_END : LABEL_END));
+  return { rect: clean ?? covering?.rect ?? null, over: covering?.over ?? null, need };
 }
 
 const cache = new WeakMap<readonly Element[], Layout>();
@@ -563,51 +639,17 @@ export function layoutOf(elements: readonly Element[]): Layout {
   const labels = new Map<string, Rect>();
   const placed: Rect[] = [];
   const blockers = [...boxes.map((box) => inflate(box, LABEL_CLEAR)), ...texts.map((text) => inflate(text.ink, LABEL_CLEAR))];
+  const arrowIds = arrows.map((arrow) => arrow.id);
   for (const arrow of arrows) {
     if (arrow.label === undefined || arrow.label === "") continue;
-    const path = routes.get(arrow.id)!;
-    const w = textWidth(arrow.label, ARROW_FONT) + LABEL_PAD;
-    const heads = arrow.heads ?? "end";
-    const headAtStart = heads === "start" || heads === "both";
-    const headAtEnd = heads === "end" || heads === "both";
-    const segments = path.slice(0, -1).map((p, i) => ({ p, q: path[i + 1]!, i }));
-    segments.sort((s, t) => Math.hypot(t.q.x - t.p.x, t.q.y - t.p.y) - Math.hypot(s.q.x - s.p.x, s.q.y - s.p.y));
-    let clean: Rect | null = null;
-    let covering: { rect: Rect; over: string } | null = null;
-    for (const { p, q, i } of segments) {
-      const length = Math.hypot(q.x - p.x, q.y - p.y);
-      const horizontal = Math.abs(q.x - p.x) >= Math.abs(q.y - p.y);
-      const startRoom = i === 0 && headAtStart ? LABEL_HEAD_END : LABEL_END;
-      const endRoom = i === path.length - 2 && headAtEnd ? LABEL_HEAD_END : LABEL_END;
-      const span = horizontal ? w : LABEL_H;
-      const slack = length - span - startRoom - endRoom;
-      if (slack < 0) continue;
-      const centre = startRoom + span / 2 + slack / 2;
-      const offsets = [0];
-      for (let k = LABEL_STEP; k <= slack / 2; k += LABEL_STEP) offsets.push(-k, k);
-      for (const offset of offsets) {
-        const t = (centre + offset) / length;
-        const at = { x: p.x + (q.x - p.x) * t, y: p.y + (q.y - p.y) * t };
-        const rect = { x: at.x - w / 2, y: at.y - LABEL_H / 2, w, h: LABEL_H };
-        if (blockers.some((b) => intersects(rect, b)) || placed.some((b) => intersects(rect, inflate(b, LABEL_CLEAR)))) continue;
-        const over = arrows.find((other) => other.id !== arrow.id && runs.get(other.id)!.some((run) => runCrosses(run, rect)));
-        if (over === undefined) {
-          clean = rect;
-          break;
-        }
-        covering ??= { rect, over: over.id };
-      }
-      if (clean !== null) break;
-    }
-    const chosen = clean ?? covering?.rect ?? null;
-    if (chosen === null) {
-      const need = Math.ceil(w + LABEL_END + (headAtEnd || headAtStart ? LABEL_HEAD_END : LABEL_END));
-      note([arrow.id], `${arrow.id} label ${JSON.stringify(arrow.label)} hidden: needs ${need}px of clear line`);
+    const choice = placeLabel(arrow, routes.get(arrow.id)!, runs, arrowIds, blockers, placed);
+    if (choice.rect === null) {
+      note([arrow.id], `${arrow.id} label ${JSON.stringify(arrow.label)} hidden: needs ${choice.need}px of clear line`);
       continue;
     }
-    if (clean === null && covering !== null) note([arrow.id, covering.over], `${arrow.id} label covers ${covering.over}`);
-    labels.set(arrow.id, chosen);
-    placed.push(chosen);
+    if (choice.over !== null) note([arrow.id, choice.over], `${arrow.id} label covers ${choice.over}`);
+    labels.set(arrow.id, choice.rect);
+    placed.push(choice.rect);
   }
 
   const members = new WeakSet<Element>(elements);

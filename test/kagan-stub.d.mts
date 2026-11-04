@@ -1,0 +1,30 @@
+export class View {}
+export function next(): Promise<unknown>;
+export function reply(id: string, value: unknown): void;
+export function fail(id: string, message: string): void;
+export function post(panelId: string, message: unknown): Promise<void>;
+export function context(): { threadId: string; projectId: string; focused: boolean; theme: string };
+export function onContextChanged(): Promise<never>;
+export function openPanel(panelId: string): Promise<void>;
+export function pasteIntoThread(threadId: string, text: string): Promise<void>;
+export function writeClipboardPng(base64: string): void;
+export function log(): void;
+export function get(id: string): Promise<{ id: string; projectId: string; title: string; status: string }>;
+export function list(): Promise<{ id: string; projectId: string; title: string; status: string }[]>;
+export function project(id: string): Promise<{ id: string; name: string }>;
+export function projects(): Promise<{ id: string; name: string }[]>;
+export function migrate(): Promise<void>;
+export function query(sql: string, params: unknown[]): Promise<Record<string, unknown>[]>;
+export function transaction(statements: { sql: string; params: unknown[] }[]): Promise<void>;
+export function enqueue(job: unknown): void;
+export function snapshot(): {
+  replies: any[];
+  failures: any[];
+  posted: any[];
+  panels: any[];
+  pastes: any[];
+  clipboard: any[];
+  rows: Map<string, unknown>;
+};
+export function clear(): void;
+export function until(check: () => boolean, timeoutMs?: number): Promise<void>;

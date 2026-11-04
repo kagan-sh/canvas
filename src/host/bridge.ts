@@ -1,4 +1,4 @@
-import { pageRequestSchema, type PageRequest } from "./protocol.ts";
+import { pageRequestSchema, type PageRequest } from "../protocol.ts";
 
 export type Parsed = { ok: true; request: PageRequest } | { ok: false; id: number | null; error: string };
 

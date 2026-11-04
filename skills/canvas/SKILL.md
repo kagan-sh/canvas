@@ -43,8 +43,9 @@ A box clips its label to the box. Use a noun phrase, never a sentence.
 ### Arrow labels
 
 A label sits on the longest clear stretch of its line, away from boxes, text,
-other labels, and the arrowhead. When no stretch fits, the label is hidden and
-the edit says `needs Npx of clear line`.
+other labels, and the arrowhead. When nothing is clear it takes the least-bad
+spot, and the edit reports `label covers`. When no stretch fits at all, the
+label is hidden and the edit says `needs Npx of clear line`.
 
 - Across a horizontal gap: `gap >= 12 * n + 60`, with the same `n` as a box
   label. Add 25 when `heads` is `both`. Keep a label to 8 characters.
