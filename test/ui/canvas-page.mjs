@@ -50,7 +50,7 @@ function check(name, ok, detail = "") {
   console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? `  (${detail})` : ""}`);
 }
 
-async function openPage(browser, theme, { pushContext = true } = {}) {
+async function openPage(browser, theme, { pushContext = true, coarse = false } = {}) {
   const server = serve(theme);
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
   const { port } = server.address();
@@ -66,6 +66,14 @@ async function openPage(browser, theme, { pushContext = true } = {}) {
     if (res.url().endsWith(".woff2")) fonts.push(res.status());
   });
   await page.addInitScript({ content: stubJs });
+  // A touch screen: the page reads "(pointer: coarse)" as matching. Set before the page loads.
+  if (coarse) {
+    await page.addInitScript(() => {
+      const real = window.matchMedia.bind(window);
+      window.matchMedia = (query) =>
+        query === "(pointer: coarse)" ? { matches: true, media: query, addEventListener() {}, removeEventListener() {} } : real(query);
+    });
+  }
   const headers = { value: "" };
   page.on("response", (res) => {
     if (res.url() === `http://127.0.0.1:${port}/`) headers.value = res.headers()["content-security-policy"] ?? "";
@@ -316,6 +324,87 @@ async function panel(browser) {
   }
 }
 
+// Heights of the controls a person taps or types in. At a side-panel width with a mouse these stay the desktop size.
+const chrome = (page) =>
+  page.evaluate(() => {
+    const height = (selector) => Math.round(document.querySelector(selector)?.getBoundingClientRect().height ?? -1);
+    return { tool: height(".cv-toolbar .cv-btn"), field: height(".cv-send input"), select: height(".cv-send select") };
+  });
+// The drawing's own frame: where its origin sits and how far it is zoomed. A draw must not change these.
+const view = (page) =>
+  page.evaluate(() => {
+    const svg = document.querySelector("svg.cv-svg");
+    const [x, y, w] = (svg.getAttribute("viewBox") ?? "0 0 0 0").split(" ").map(Number);
+    const frame = svg.getBoundingClientRect();
+    return { x: Math.round(x * 100) / 100, y: Math.round(y * 100) / 100, scale: Math.round((frame.width / w) * 1000) / 1000, zoom: document.querySelector(".cv-zoom")?.innerText ?? "", frameH: Math.round(frame.height), topH: Math.round(document.querySelector(".cv-top")?.getBoundingClientRect().height ?? 0), dockH: Math.round(document.querySelector(".cv-dock")?.getBoundingClientRect().height ?? 0) };
+  });
+
+async function sizing(browser) {
+  {
+    const { server, context, page, problems } = await openPage(browser, "light");
+    try {
+      await page.waitForSelector(".cv-send select");
+      const wide = await chrome(page);
+      await page.setViewportSize({ width: 600, height: 760 });
+      await page.waitForTimeout(300);
+      const narrow = await chrome(page);
+      check("a. a 600 px panel with a mouse keeps the desktop control sizes", JSON.stringify(narrow) === JSON.stringify(wide), `wide ${JSON.stringify(wide)} · 600 px ${JSON.stringify(narrow)}`);
+      check("a. the 600 px mouse panel has no console errors", problems.length === 0, problems.join(" | ").slice(0, 300));
+    } finally {
+      await context.close();
+      server.close();
+    }
+  }
+  {
+    const { server, context, page, problems } = await openPage(browser, "light", { coarse: true });
+    try {
+      const coarse = await page.evaluate(() => window.matchMedia("(pointer: coarse)").matches);
+      check("b. the touch test really reports a coarse pointer", coarse);
+      await page.setViewportSize({ width: 600, height: 760 });
+      await page.waitForTimeout(300);
+      const touch = await chrome(page);
+      check("b. a touch screen in a 600 px panel gets the big targets", touch.tool === 44 && touch.field === 40 && touch.select === 40, JSON.stringify(touch));
+      check("b. the touch panel has no console errors", problems.length === 0, problems.join(" | ").slice(0, 300));
+    } finally {
+      await context.close();
+      server.close();
+    }
+  }
+}
+
+async function narrowDraw(browser) {
+  const { server, context, page, problems } = await openPage(browser, "light");
+  try {
+    await page.setViewportSize({ width: 600, height: 760 });
+    await page.waitForSelector(".cv-empty-line");
+    await page.waitForTimeout(300);
+    await page.mouse.click(300, 300); // empty canvas: focus the page, clear selection
+    await page.keyboard.press("r");
+    await page.waitForTimeout(300);
+    const before = await view(page);
+    await page.screenshot({ path: path.join(shotDir, "narrow-600-before-draw.png") });
+    await page.evaluate(() => {
+      window.kaganStub.clearCalls();
+      window.__viewLog = [];
+      const svg = document.querySelector("svg.cv-svg");
+      new MutationObserver(() => window.__viewLog.push(svg.getAttribute("viewBox"))).observe(svg, { attributes: true });
+    });
+    await drag(page, { x: 150, y: 220 }, { x: 260, y: 300 });
+    await waitCount(page, 1);
+    const after = await view(page);
+    const calls = await page.evaluate(() => window.kaganStub.calls());
+    const moves = await page.evaluate(() => window.__viewLog);
+    await page.screenshot({ path: path.join(shotDir, "narrow-600-after-draw.png") });
+    const detail = `before ${JSON.stringify(before)} · after ${JSON.stringify(after)} · view changes ${moves.length} · calls ${calls.join(",")}`;
+    check("k. drawing a box at 600 px does not move or re-center the view", before.x === after.x && before.y === after.y && before.scale === after.scale && before.zoom === after.zoom, detail);
+    check("k. the page does not refetch its own box", !calls.includes("open") && !calls.includes("list"), calls.join(","));
+    check("k. drawing a box at 600 px has no console errors", problems.length === 0, problems.join(" | ").slice(0, 300));
+  } finally {
+    await context.close();
+    server.close();
+  }
+}
+
 async function screenshots(browser, theme) {
   fs.mkdirSync(shotDir, { recursive: true });
   const { server, context, page, problems } = await openPage(browser, theme);
@@ -338,6 +427,8 @@ const browser = await chromium.launch();
 try {
   await functional(browser);
   await panel(browser);
+  await sizing(browser);
+  await narrowDraw(browser);
   await bridge(browser);
   await screenshots(browser, "light");
   await screenshots(browser, "dark");

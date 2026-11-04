@@ -59,6 +59,8 @@ function handle(request: Request) {
         undo.set(name, [...(undo.get(name) ?? []), current]);
         redo.set(name, []);
         write(name, result.doc);
+        // Like main.ts: the change is announced before the call answers.
+        dispatch({ push: "changed", name, rev: result.doc.rev });
         ok(id, { doc: result.doc, added: result.added });
         return;
       }
