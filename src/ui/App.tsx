@@ -263,7 +263,8 @@ function Canvas() {
   );
   const open = useCallback(
     (name?: string) => {
-      setSelectedIds([]);
+      // Keep the same array when nothing is selected: the layout effect that freezes the fit treats a new array as a change.
+      setSelectedIds((ids) => (ids.length === 0 ? ids : []));
       setEditing(null);
       refetch(name);
     },
@@ -340,6 +341,7 @@ function Canvas() {
     }
   }, [doc]);
   const narrow = measured && (size.w < NARROW_CANVAS || (coarse && size.w < 1100));
+  const touch = narrow && coarse;
   const fit = useCallback(() => {
     userMoved.current = false;
     setView(fitView(doc === null ? null : contentBounds(doc), size.w, size.h));
@@ -368,6 +370,11 @@ function Canvas() {
     if (userMoved.current) return;
     setView(fitView(contentBounds(docRef.current), size.w, size.h));
   }, [doc?.name, measured, size.h, size.w]);
+  // A selection or a tool change grows the bottom bar; that must not re-center a fitted drawing under the person's hand.
+  const freezeFit = () => {
+    if (docRef.current !== null && fittedRef.current === docRef.current.name) userMoved.current = true;
+  };
+  useLayoutEffect(freezeFit, [tool, selectedIds, editing, menuOpen, paletteOpen]);
 
   /** Shows a plugin call's doc only when no other call for the canvas is still out, then
    * fetches again if a push or a failure says the page may be behind. */
@@ -407,6 +414,8 @@ function Canvas() {
         const local = applyOps(current, ops).doc;
         epochRef.current++;
         show(local);
+        // The chrome changes height after an edit, so keep the framing the person already had.
+        userMoved.current = true;
       } catch (cause) {
         fail(cause);
         return [];
@@ -545,6 +554,7 @@ function Canvas() {
 
   const onDown = (event: ReactPointerEvent<SVGSVGElement>) => {
     if (doc === null) return;
+    freezeFit();
     setMenuOpen(false);
     setPaletteOpen(false);
     rootRef.current?.focus({ preventScroll: true });
@@ -820,6 +830,7 @@ function Canvas() {
     (direction: "undo" | "redo") => {
       const name = nameRef.current;
       if (name === null) return;
+      userMoved.current = true;
       void settle(name, call<unknown>({ call: direction, name }, valueSchemas[direction]), docOf);
     },
     [settle],
@@ -989,7 +1000,7 @@ function Canvas() {
   const sendReason = threadId === null ? "Open a thread to send this canvas to it." : null;
 
   return (
-    <div ref={rootRef} className={narrow ? "cv-root cv-narrow" : "cv-root"} tabIndex={0}>
+    <div ref={rootRef} className={["cv-root", narrow && "cv-narrow", touch && "cv-touch"].filter(Boolean).join(" ")} tabIndex={0}>
       <div ref={frameRef} className="cv-frame" style={{ top: docks.top, bottom: docks.bottom }}>
         <svg
           ref={svgRef}
@@ -1063,8 +1074,8 @@ function Canvas() {
           {handleBox
             ? HANDLES.map((handle) => {
                 // Side handles only once the box is big enough to tell them from the corners.
-                if (handle.length === 1 && (handleBox.w * s < (narrow ? 72 : 40) || handleBox.h * s < (narrow ? 72 : 40))) return null;
-                const side = (narrow ? 28 : 8) / s;
+                if (handle.length === 1 && (handleBox.w * s < (touch ? 72 : 40) || handleBox.h * s < (touch ? 72 : 40))) return null;
+                const side = (touch ? 28 : 8) / s;
                 const hx = handle.includes("w") ? handleBox.x : handle.includes("e") ? handleBox.x + handleBox.w : handleBox.x + handleBox.w / 2;
                 const hy = handle.includes("n") ? handleBox.y : handle.includes("s") ? handleBox.y + handleBox.h : handleBox.y + handleBox.h / 2;
                 return (

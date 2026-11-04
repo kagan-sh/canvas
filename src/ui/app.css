@@ -542,17 +542,18 @@ body {
 .cv-narrow .cv-shortcut {
   display: none;
 }
-.cv-narrow .cv-btn {
+/* Big targets only for a touch screen. A mouse in a narrow panel keeps the desktop sizes. */
+.cv-touch .cv-btn {
   width: 44px;
   height: 44px;
 }
-.cv-narrow .cv-zoom,
-.cv-narrow .cv-group {
+.cv-touch .cv-zoom,
+.cv-touch .cv-group {
   height: 44px;
 }
-.cv-narrow .cv-select,
-.cv-narrow .cv-field,
-.cv-narrow .cv-primary {
+.cv-touch .cv-select,
+.cv-touch .cv-field,
+.cv-touch .cv-primary {
   height: 40px;
   font-size: 16px;
 }

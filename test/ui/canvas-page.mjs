@@ -50,7 +50,7 @@ function check(name, ok, detail = "") {
   console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? `  (${detail})` : ""}`);
 }
 
-async function openPage(browser, theme, { pushContext = true } = {}) {
+async function openPage(browser, theme, { pushContext = true, coarse = false, seed } = {}) {
   const server = serve(theme);
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
   const { port } = server.address();
@@ -65,7 +65,16 @@ async function openPage(browser, theme, { pushContext = true } = {}) {
   page.on("response", (res) => {
     if (res.url().endsWith(".woff2")) fonts.push(res.status());
   });
+  if (seed) await page.addInitScript(`window.__seed = ${JSON.stringify(seed)};`);
   await page.addInitScript({ content: stubJs });
+  // A touch screen: the page reads "(pointer: coarse)" as matching. Set before the page loads.
+  if (coarse) {
+    await page.addInitScript(() => {
+      const real = window.matchMedia.bind(window);
+      window.matchMedia = (query) =>
+        query === "(pointer: coarse)" ? { matches: true, media: query, addEventListener() {}, removeEventListener() {} } : real(query);
+    });
+  }
   const headers = { value: "" };
   page.on("response", (res) => {
     if (res.url() === `http://127.0.0.1:${port}/`) headers.value = res.headers()["content-security-policy"] ?? "";
@@ -316,6 +325,164 @@ async function panel(browser) {
   }
 }
 
+const chrome = (page) =>
+  page.evaluate(() => {
+    const height = (selector) => Math.round(document.querySelector(selector)?.getBoundingClientRect().height ?? -1);
+    return { tool: height(".cv-toolbar .cv-btn"), field: height(".cv-send input"), select: height(".cv-send select") };
+  });
+const view = (page) =>
+  page.evaluate(() => {
+    const svg = document.querySelector("svg.cv-svg");
+    const [x, y, w] = (svg.getAttribute("viewBox") ?? "0 0 0 0").split(" ").map(Number);
+    const frame = svg.getBoundingClientRect();
+    return { x: Math.round(x * 100) / 100, y: Math.round(y * 100) / 100, scale: Math.round((frame.width / w) * 1000) / 1000, zoom: document.querySelector(".cv-zoom")?.innerText ?? "", frameH: Math.round(frame.height), topH: Math.round(document.querySelector(".cv-top")?.getBoundingClientRect().height ?? 0), dockH: Math.round(document.querySelector(".cv-dock")?.getBoundingClientRect().height ?? 0) };
+  });
+
+async function sizing(browser) {
+  {
+    const { server, context, page, problems } = await openPage(browser, "light");
+    try {
+      await page.waitForSelector(".cv-send select");
+      const wide = await chrome(page);
+      await page.setViewportSize({ width: 600, height: 760 });
+      await page.waitForTimeout(300);
+      const narrow = await chrome(page);
+      check("a. a 600 px panel with a mouse keeps the desktop control sizes", JSON.stringify(narrow) === JSON.stringify(wide), `wide ${JSON.stringify(wide)} · 600 px ${JSON.stringify(narrow)}`);
+      check("a. the 600 px mouse panel has no console errors", problems.length === 0, problems.join(" | ").slice(0, 300));
+    } finally {
+      await context.close();
+      server.close();
+    }
+  }
+  {
+    const { server, context, page, problems } = await openPage(browser, "light", { coarse: true });
+    try {
+      const coarse = await page.evaluate(() => window.matchMedia("(pointer: coarse)").matches);
+      check("b. the touch test really reports a coarse pointer", coarse);
+      await page.setViewportSize({ width: 600, height: 760 });
+      await page.waitForTimeout(300);
+      const touch = await chrome(page);
+      check("b. a touch screen in a 600 px panel gets the big targets", touch.tool === 44 && touch.field === 40 && touch.select === 40, JSON.stringify(touch));
+      check("b. the touch panel has no console errors", problems.length === 0, problems.join(" | ").slice(0, 300));
+    } finally {
+      await context.close();
+      server.close();
+    }
+  }
+}
+
+const sameView = (a, b) => a.x === b.x && a.y === b.y && a.scale === b.scale && a.zoom === b.zoom;
+
+async function narrowDraw(browser, { coarse = false } = {}) {
+  const where = coarse ? "600 px touch panel" : "600 px panel";
+  const { server, context, page, problems } = await openPage(browser, "light", { coarse });
+  try {
+    await page.setViewportSize({ width: 600, height: 760 });
+    await page.waitForSelector(".cv-empty-line");
+    await page.waitForTimeout(300);
+    await page.mouse.click(300, 300); // empty canvas: focus the page, clear selection
+    await page.keyboard.press("r");
+    await page.waitForTimeout(300);
+    const before = await view(page);
+    await page.screenshot({ path: path.join(shotDir, `narrow-600-before-draw${coarse ? "-touch" : ""}.png`) });
+    await page.evaluate(() => {
+      window.kaganStub.clearCalls();
+      window.__viewLog = [];
+      const svg = document.querySelector("svg.cv-svg");
+      new MutationObserver(() => window.__viewLog.push(svg.getAttribute("viewBox"))).observe(svg, { attributes: true });
+    });
+    await drag(page, { x: 150, y: 220 }, { x: 260, y: 300 });
+    await waitCount(page, 1);
+    const after = await view(page);
+    const calls = await page.evaluate(() => window.kaganStub.calls());
+    const moves = await page.evaluate(() => window.__viewLog);
+    await page.screenshot({ path: path.join(shotDir, `narrow-600-after-draw${coarse ? "-touch" : ""}.png`) });
+    const detail = `before ${JSON.stringify(before)} · after ${JSON.stringify(after)} · view changes ${moves.length} · calls ${calls.join(",")}`;
+    check(`k. drawing a box in a ${where} does not move or re-center the view`, sameView(before, after), detail);
+    check("k. the page does not refetch its own box", !calls.includes("open") && !calls.includes("list"), calls.join(","));
+    // An arrow selects a row of options a box does not have, so the dock grows once the arrow is drawn.
+    await page.keyboard.press("a");
+    await page.waitForTimeout(200);
+    const beforeArrow = await view(page);
+    await page.evaluate(() => {
+      window.kaganStub.clearCalls();
+      window.__viewLog = [];
+    });
+    await drag(page, { x: 330, y: 250 }, { x: 450, y: 250 });
+    await waitCount(page, 2);
+    const afterArrow = await view(page);
+    const arrowCalls = await page.evaluate(() => window.kaganStub.calls());
+    check(`k. drawing an arrow in a ${where} does not move or re-center the view`, sameView(beforeArrow, afterArrow), `before ${JSON.stringify(beforeArrow)} · after ${JSON.stringify(afterArrow)} · calls ${arrowCalls.join(",")}`);
+    check(`k. drawing in a ${where} has no console errors`, problems.length === 0, problems.join(" | ").slice(0, 300));
+  } finally {
+    await context.close();
+    server.close();
+  }
+}
+
+async function savedDrag(browser, width) {
+  const seed = { Main: [{ op: "add", element: { type: "box", x: 400, y: 200, w: 160, h: 100, label: "saved" } }] };
+  const { server, context, page, problems } = await openPage(browser, "light", { seed });
+  try {
+    await page.setViewportSize({ width, height: 760 });
+    await page.waitForFunction(() => document.querySelectorAll("svg.cv-svg [data-id]").length >= 1, null, { timeout: 4000 }).catch(async (error) => {
+      const state = await page.evaluate(() => ({ count: document.querySelectorAll("svg.cv-svg [data-id]").length, svg: document.querySelector("svg.cv-svg")?.innerHTML.slice(0, 300) ?? null, calls: window.kaganStub?.calls() ?? null }));
+      throw new Error(`seeded box not shown: ${JSON.stringify(state).slice(0, 600)} ${problems.join(" | ").slice(0, 300)} ${error.message.slice(0, 80)}`);
+    });
+    await page.waitForTimeout(400);
+    const before = await view(page);
+    const onScreen = await page.evaluate(() => {
+      const frame = document.querySelector("svg.cv-svg").getBoundingClientRect();
+      const box = document.querySelector("svg.cv-svg [data-id]").getBoundingClientRect();
+      return box.left >= frame.left && box.right <= frame.right && box.top >= frame.top && box.bottom <= frame.bottom;
+    });
+    check(`k. a saved drawing is fitted on screen after the panel is ${width} px`, onScreen, JSON.stringify(before));
+    const grab = await page.evaluate(() => {
+      const r = document.querySelector("svg.cv-svg [data-id]").getBoundingClientRect();
+      const x = r.left + r.width / 2;
+      const y = r.top + r.height / 2;
+      return { x, y, onBox: document.elementFromPoint(x, y)?.closest("[data-id]") !== null };
+    });
+    await page.evaluate(() => window.kaganStub.clearCalls());
+    await drag(page, { x: grab.x, y: grab.y }, { x: grab.x + 60, y: grab.y });
+    await page.waitForTimeout(400);
+    const after = await view(page);
+    const calls = await page.evaluate(() => window.kaganStub.calls());
+    check(`k. dragging a saved box in a ${width} px panel does not move the view`, grab.onBox && sameView(before, after), `pressed on box ${grab.onBox} · before ${JSON.stringify(before)} · after ${JSON.stringify(after)} · calls ${calls.join(",")}`);
+    check(`k. the saved-box drag in a ${width} px panel has no console errors`, problems.length === 0, problems.join(" | ").slice(0, 300));
+  } finally {
+    await context.close();
+    server.close();
+  }
+}
+
+async function undoDraw(browser) {
+  const { server, context, page, problems } = await openPage(browser, "light");
+  try {
+    await page.setViewportSize({ width: 600, height: 760 });
+    await page.waitForSelector(".cv-empty-line");
+    await page.waitForTimeout(300);
+    await page.mouse.click(300, 300);
+    await page.keyboard.press("r");
+    await page.waitForTimeout(300);
+    await drag(page, { x: 150, y: 220 }, { x: 260, y: 300 });
+    await waitCount(page, 1);
+    const before = await view(page);
+    await page.evaluate(() => window.kaganStub.clearCalls());
+    await page.locator("[aria-label='Undo']").click();
+    await page.waitForFunction(() => document.querySelectorAll("svg.cv-svg [data-id]").length === 0, null, { timeout: 4000 });
+    await page.waitForTimeout(300);
+    const after = await view(page);
+    const calls = await page.evaluate(() => window.kaganStub.calls());
+    check("k. undoing a box in a 600 px panel does not move the view", sameView(before, after), `before ${JSON.stringify(before)} · after ${JSON.stringify(after)} · calls ${calls.join(",")}`);
+    check("k. undo asks the plugin once and does not refetch", calls.join(",") === "undo", calls.join(","));
+    check("k. undo in a 600 px panel has no console errors", problems.length === 0, problems.join(" | ").slice(0, 300));
+  } finally {
+    await context.close();
+    server.close();
+  }
+}
+
 async function screenshots(browser, theme) {
   fs.mkdirSync(shotDir, { recursive: true });
   const { server, context, page, problems } = await openPage(browser, theme);
@@ -338,6 +505,12 @@ const browser = await chromium.launch();
 try {
   await functional(browser);
   await panel(browser);
+  await sizing(browser);
+  await narrowDraw(browser);
+  await narrowDraw(browser, { coarse: true });
+  await savedDrag(browser, 600);
+  await savedDrag(browser, 1100);
+  await undoDraw(browser);
   await bridge(browser);
   await screenshots(browser, "light");
   await screenshots(browser, "dark");

@@ -6,6 +6,9 @@ import { applyOps, emptyDoc, type Doc, type Op } from "../../src/model.ts";
 type Request = { id: number; call: string; [key: string]: any };
 
 const docs = new Map<string, Doc>();
+// A page can start with saved drawings: window.__seed maps a canvas name to the ops that draw it.
+const seeded = (globalThis as { __seed?: Record<string, Op[]> }).__seed ?? {};
+for (const [name, ops] of Object.entries(seeded)) docs.set(name, applyOps(emptyDoc(name), ops).doc);
 const undo = new Map<string, Doc[]>();
 const redo = new Map<string, Doc[]>();
 const pngParts: { index: number; last: boolean; data: string }[] = [];
@@ -59,6 +62,8 @@ function handle(request: Request) {
         undo.set(name, [...(undo.get(name) ?? []), current]);
         redo.set(name, []);
         write(name, result.doc);
+        // Announce the change before the call answers, as main.ts does.
+        dispatch({ push: "changed", name, rev: result.doc.rev });
         ok(id, { doc: result.doc, added: result.added });
         return;
       }
@@ -70,10 +75,14 @@ function handle(request: Request) {
         const stack = from.get(name) ?? [];
         const previous = stack.pop();
         if (previous === undefined) return fail(id, "Nothing to undo.");
+        const current = docFor(name);
         from.set(name, stack);
-        to.set(name, [...(to.get(name) ?? []), docFor(name)]);
-        write(name, previous);
-        ok(id, previous);
+        to.set(name, [...(to.get(name) ?? []), current]);
+        // Undo and redo bump the revision as the store does, and main.ts announces the change before the call answers.
+        const next = { ...previous, rev: current.rev + 1 };
+        write(name, next);
+        dispatch({ push: "changed", name, rev: next.rev });
+        ok(id, { doc: next });
         return;
       }
       case "delete": {
