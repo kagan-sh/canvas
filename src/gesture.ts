@@ -1,6 +1,6 @@
 import { MAX_SCALE, MIN_SCALE } from "./constants.ts";
 
-/** Below this panel width the chrome stacks and touch targets grow. Phones in both orientations sit under it. */
+/** Below this panel width the chrome stacks and the copy shortens. Phones in both orientations sit under it. */
 export const NARROW_CANVAS = 720;
 
 export type CanvasView = { x: number; y: number; scale: number };

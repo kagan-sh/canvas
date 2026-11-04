@@ -339,7 +339,9 @@ function Canvas() {
       else toast.error("Couldn't copy the canvas as an image", messageOf(cause));
     }
   }, [doc]);
+  // A narrow panel stacks its chrome and shortens its copy. Only a touch screen gets the big targets.
   const narrow = measured && (size.w < NARROW_CANVAS || (coarse && size.w < 1100));
+  const touch = narrow && coarse;
   const fit = useCallback(() => {
     userMoved.current = false;
     setView(fitView(doc === null ? null : contentBounds(doc), size.w, size.h));
@@ -989,7 +991,7 @@ function Canvas() {
   const sendReason = threadId === null ? "Open a thread to send this canvas to it." : null;
 
   return (
-    <div ref={rootRef} className={narrow ? "cv-root cv-narrow" : "cv-root"} tabIndex={0}>
+    <div ref={rootRef} className={["cv-root", narrow && "cv-narrow", touch && "cv-touch"].filter(Boolean).join(" ")} tabIndex={0}>
       <div ref={frameRef} className="cv-frame" style={{ top: docks.top, bottom: docks.bottom }}>
         <svg
           ref={svgRef}
@@ -1063,8 +1065,8 @@ function Canvas() {
           {handleBox
             ? HANDLES.map((handle) => {
                 // Side handles only once the box is big enough to tell them from the corners.
-                if (handle.length === 1 && (handleBox.w * s < (narrow ? 72 : 40) || handleBox.h * s < (narrow ? 72 : 40))) return null;
-                const side = (narrow ? 28 : 8) / s;
+                if (handle.length === 1 && (handleBox.w * s < (touch ? 72 : 40) || handleBox.h * s < (touch ? 72 : 40))) return null;
+                const side = (touch ? 28 : 8) / s;
                 const hx = handle.includes("w") ? handleBox.x : handle.includes("e") ? handleBox.x + handleBox.w : handleBox.x + handleBox.w / 2;
                 const hy = handle.includes("n") ? handleBox.y : handle.includes("s") ? handleBox.y + handleBox.h : handleBox.y + handleBox.h / 2;
                 return (
