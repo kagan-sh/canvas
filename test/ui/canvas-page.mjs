@@ -372,8 +372,11 @@ async function sizing(browser) {
   }
 }
 
-async function narrowDraw(browser) {
-  const { server, context, page, problems } = await openPage(browser, "light");
+const sameView = (a, b) => a.x === b.x && a.y === b.y && a.scale === b.scale && a.zoom === b.zoom;
+
+async function narrowDraw(browser, { coarse = false } = {}) {
+  const where = coarse ? "600 px touch panel" : "600 px panel";
+  const { server, context, page, problems } = await openPage(browser, "light", { coarse });
   try {
     await page.setViewportSize({ width: 600, height: 760 });
     await page.waitForSelector(".cv-empty-line");
@@ -396,9 +399,22 @@ async function narrowDraw(browser) {
     const moves = await page.evaluate(() => window.__viewLog);
     await page.screenshot({ path: path.join(shotDir, "narrow-600-after-draw.png") });
     const detail = `before ${JSON.stringify(before)} · after ${JSON.stringify(after)} · view changes ${moves.length} · calls ${calls.join(",")}`;
-    check("k. drawing a box at 600 px does not move or re-center the view", before.x === after.x && before.y === after.y && before.scale === after.scale && before.zoom === after.zoom, detail);
+    check(`k. drawing a box in a ${where} does not move or re-center the view`, sameView(before, after), detail);
     check("k. the page does not refetch its own box", !calls.includes("open") && !calls.includes("list"), calls.join(","));
-    check("k. drawing a box at 600 px has no console errors", problems.length === 0, problems.join(" | ").slice(0, 300));
+    // An arrow selects a row of options the box does not have, so the dock grows as it lands.
+    await page.keyboard.press("a");
+    await page.waitForTimeout(200);
+    const beforeArrow = await view(page);
+    await page.evaluate(() => {
+      window.kaganStub.clearCalls();
+      window.__viewLog = [];
+    });
+    await drag(page, { x: 330, y: 250 }, { x: 450, y: 250 });
+    await waitCount(page, 2);
+    const afterArrow = await view(page);
+    const arrowCalls = await page.evaluate(() => window.kaganStub.calls());
+    check(`k. drawing an arrow in a ${where} does not move or re-center the view`, sameView(beforeArrow, afterArrow), `before ${JSON.stringify(beforeArrow)} · after ${JSON.stringify(afterArrow)} · calls ${arrowCalls.join(",")}`);
+    check(`k. drawing in a ${where} has no console errors`, problems.length === 0, problems.join(" | ").slice(0, 300));
   } finally {
     await context.close();
     server.close();
@@ -429,6 +445,7 @@ try {
   await panel(browser);
   await sizing(browser);
   await narrowDraw(browser);
+  await narrowDraw(browser, { coarse: true });
   await bridge(browser);
   await screenshots(browser, "light");
   await screenshots(browser, "dark");
