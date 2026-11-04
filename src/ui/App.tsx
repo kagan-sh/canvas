@@ -263,7 +263,7 @@ function Canvas() {
   );
   const open = useCallback(
     (name?: string) => {
-      // Keep the empty array when nothing is selected: the effects watching selectedIds treat a new one as a change.
+      // Keep the same array when nothing is selected: the layout effect that freezes the fit treats a new array as a change.
       setSelectedIds((ids) => (ids.length === 0 ? ids : []));
       setEditing(null);
       refetch(name);
@@ -370,7 +370,7 @@ function Canvas() {
     if (userMoved.current) return;
     setView(fitView(contentBounds(docRef.current), size.w, size.h));
   }, [doc?.name, measured, size.h, size.w]);
-  // Selecting a box grows the bottom bar, which must not re-center a fitted drawing under the person's hand.
+  // A selection or a tool change grows the bottom bar; that must not re-center a fitted drawing under the person's hand.
   const freezeFit = () => {
     if (docRef.current !== null && fittedRef.current === docRef.current.name) userMoved.current = true;
   };
