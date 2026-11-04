@@ -9,7 +9,7 @@
     "build:main": "esbuild src/main.ts --bundle --format=esm --target=es2022 --external:kagan/* --external:gpui-kit --external:gpui-shell --outfile=main.js",
     "build:ui": "esbuild src/ui/main.tsx --bundle --format=iife --target=es2022 --jsx=automatic --minify --outfile=ui/app.js && tailwindcss -i src/ui/app.css -o ui/app.css --minify",
     "typecheck": "tsc -p .",
-    "test": "node --test test/*.test.ts",
+    "test": "node --test src/*.test.ts",
     "check": "npm run typecheck && npm test && npm run build"
   },
   "dependencies": {
