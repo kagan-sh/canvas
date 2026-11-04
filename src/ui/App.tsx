@@ -409,6 +409,8 @@ function Canvas() {
         const local = applyOps(current, ops).doc;
         epochRef.current++;
         show(local);
+        // The person's own edit keeps their framing, even when the panel's chrome then changes height.
+        userMoved.current = true;
       } catch (cause) {
         fail(cause);
         return [];
@@ -822,6 +824,7 @@ function Canvas() {
     (direction: "undo" | "redo") => {
       const name = nameRef.current;
       if (name === null) return;
+      userMoved.current = true;
       void settle(name, call<unknown>({ call: direction, name }, valueSchemas[direction]), docOf);
     },
     [settle],
