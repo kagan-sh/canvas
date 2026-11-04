@@ -28,6 +28,10 @@ export type PluginMessage =
 export type OpenValue = { name: string; doc: Doc };
 export type ApplyValue = { doc: Doc; added: string[] };
 export type ListValue = { names: string[] };
+/** undo and redo answer with the doc, wrapped as `{ doc }`. The page also accepts a bare doc. */
+export type StepValue = { doc: Doc };
+/** delete answers with the names that are left. */
+export type DeleteValue = { names: string[] };
 export type ThreadsValue = { threads: ThreadRow[] };
 
 /** Largest base64 string the page sends in one `pngChunk`. Keeps each post under the 1 MiB cap. */
