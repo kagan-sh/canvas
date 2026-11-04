@@ -20764,9 +20764,6 @@ function ready() {
   migrated ??= migrate([CREATE_DIAGRAMS]);
   return migrated;
 }
-function normalizeName(name) {
-  return name.normalize("NFKC").replace(/[​-‍﻿]/g, "").trim().toLowerCase().replace(/\s+/g, "-").slice(0, 80);
-}
 async function row(name) {
   const rows = await query("SELECT doc, history, future FROM diagrams WHERE name = ?", [name]);
   return rows[0];
@@ -20906,6 +20903,9 @@ function shareText(doc, note) {
     "Draw on it with the canvas_edit tool; the canvas skill says how.",
     body === "" ? "In one or two sentences, tell me what you see. Ask whether I want to draw or change anything." : "Then do what I asked."
   ].join("\n");
+}
+function normalizeName(name) {
+  return name.normalize("NFKC").replace(/[​-‍﻿]/g, "").trim().toLowerCase().replace(/\s+/g, "-").slice(0, 80);
 }
 
 // src/main.ts
