@@ -39,7 +39,7 @@ import {
   ZoomInIcon,
   ZoomOutIcon,
 } from "../icons.tsx";
-import type { ApplyValue, ContextValue, ListValue, OpenValue, ThreadsValue, ThreadRow } from "../protocol.ts";
+import { valueSchemas, type ApplyValue, type ContextValue, type ListValue, type OpenValue, type ThreadsValue, type ThreadRow } from "../protocol.ts";
 import { call, onPush } from "./client.ts";
 import {
   HANDLES,
@@ -94,10 +94,10 @@ const messageOf = (cause: unknown) => (cause instanceof Error ? cause.message : 
 const docOf = (value: unknown): Doc => ((value as { doc?: Doc }).doc ?? (value as Doc));
 
 const api = {
-  open: (args: { threadId?: string; name?: string }) => call<OpenValue>({ call: "open", ...args }),
-  list: () => call<ListValue>({ call: "list" }),
-  threads: (threadId: string) => call<ThreadsValue>({ call: "threads", threadId }),
-  context: () => call<ContextValue>({ call: "context" }),
+  open: (args: { threadId?: string; name?: string }) => call<OpenValue>({ call: "open", ...args }, valueSchemas.open),
+  list: () => call<ListValue>({ call: "list" }, valueSchemas.list),
+  threads: (threadId: string) => call<ThreadsValue>({ call: "threads", threadId }, valueSchemas.threads),
+  context: () => call<ContextValue>({ call: "context" }, valueSchemas.context),
 };
 
 function Canvas() {
@@ -412,7 +412,7 @@ function Canvas() {
         fail(cause);
         return [];
       }
-      const result = await settle(current.name, call<ApplyValue>({ call: "apply", name: current.name, ops }), (r) => r.doc);
+      const result = await settle(current.name, call<ApplyValue>({ call: "apply", name: current.name, ops }, valueSchemas.apply), (r) => r.doc);
       return result?.added ?? [];
     },
     [show, settle],
@@ -823,7 +823,7 @@ function Canvas() {
     (direction: "undo" | "redo") => {
       const name = nameRef.current;
       if (name === null) return;
-      void settle(name, call<unknown>({ call: direction, name }), docOf);
+      void settle(name, call<unknown>({ call: direction, name }, valueSchemas[direction]), docOf);
     },
     [settle],
   );
@@ -835,7 +835,7 @@ function Canvas() {
   const removeDiagram = () => {
     if (!deleteName) return;
     const removing = deleteName;
-    call<unknown>({ call: "delete", name: removing }).then((result) => {
+    call<unknown>({ call: "delete", name: removing }, valueSchemas.delete).then((result) => {
       setDeleteName(null);
       const left = (result as { names?: string[] } | null)?.names;
       if (left !== undefined) setNames(left);
@@ -929,7 +929,7 @@ function Canvas() {
     if (nameRef.current === null || sending || target === "") return;
     setSending(true);
     try {
-      await call({ call: "send", name: nameRef.current, threadId: target, note });
+      await call({ call: "send", name: nameRef.current, threadId: target, note }, valueSchemas.send);
       setNote("");
       toast.info("Pasted into the thread. Press Enter there to send it.");
     } catch (cause) {

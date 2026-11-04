@@ -1,4 +1,6 @@
-import type { PageRequest, PluginMessage } from "../protocol.ts";
+import type { z } from "zod";
+
+import { pluginMessageSchema, type PageRequest, type PluginMessage } from "../protocol.ts";
 
 declare global {
   interface Window {
@@ -11,39 +13,60 @@ export type Push = Extract<PluginMessage, { push: string }>;
 
 export const CALL_TIMEOUT_MS = 10_000;
 
-type Waiting = { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> };
+const UNDERSTOOD = "kagan sent an answer the page does not understand.";
+
+type Waiting = {
+  schema: z.ZodType;
+  resolve: (value: unknown) => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+};
 
 const waiting = new Map<number, Waiting>();
 const listeners = new Set<(push: Push) => void>();
 let nextId = 1;
 
+function settle(id: number): Waiting | undefined {
+  const entry = waiting.get(id);
+  if (entry === undefined) return undefined;
+  waiting.delete(id);
+  clearTimeout(entry.timer);
+  return entry;
+}
+
 window.addEventListener("kagan", (event) => {
-  const message = (event as CustomEvent<PluginMessage | null>).detail;
-  if (message === null || typeof message !== "object") return;
+  const detail = (event as CustomEvent<unknown>).detail;
+  const parsed = pluginMessageSchema.safeParse(detail);
+  if (!parsed.success) {
+    // A reply that does not fit fails its call at once. Anything else is dropped.
+    const id = typeof detail === "object" && detail !== null && "reply" in detail ? detail.reply : undefined;
+    if (typeof id === "number") settle(id)?.reject(new Error(UNDERSTOOD));
+    console.warn("canvas: dropped a message from kagan that does not fit the protocol", parsed.error.issues[0]?.message);
+    return;
+  }
+  const message = parsed.data;
   if ("reply" in message) {
-    const entry = waiting.get(message.reply);
+    const entry = settle(message.reply);
     if (entry === undefined) return;
-    waiting.delete(message.reply);
-    clearTimeout(entry.timer);
-    if (message.ok) entry.resolve(message.value);
-    else entry.reject(new Error(message.error));
+    if (!message.ok) return entry.reject(new Error(message.error));
+    const checked = entry.schema.safeParse(message.value);
+    if (checked.success) entry.resolve(checked.data);
+    else entry.reject(new Error(UNDERSTOOD));
   } else if ("push" in message) {
     for (const listener of listeners) listener(message);
   }
 });
 
-export function call<T>(request: Call): Promise<T> {
+export function call<T>(request: Call, schema: z.ZodType<T>): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const id = nextId++;
     const fail = (cause: unknown) => {
-      const entry = waiting.get(id);
+      const entry = settle(id);
       if (entry === undefined) return;
-      waiting.delete(id);
-      clearTimeout(entry.timer);
       reject(cause instanceof Error ? cause : new Error(String(cause)));
     };
     const timer = setTimeout(() => fail(new Error("No answer from kagan. Try again.")), CALL_TIMEOUT_MS);
-    waiting.set(id, { resolve: resolve as (value: unknown) => void, reject, timer });
+    waiting.set(id, { schema, resolve: resolve as (value: unknown) => void, reject, timer });
     try {
       Promise.resolve(window.kagan.post({ id, ...request })).catch(fail);
     } catch (cause) {

@@ -1,5 +1,8 @@
 import { z } from "zod";
 
+// zod compiles its fast parsers with `new Function`, which the web panel's CSP refuses. Parse without it.
+z.config({ jitless: true });
+
 import { COLORS, WORLD_LIMIT } from "./constants.ts";
 import { textBounds, type Point, type Rect } from "./layout.ts";
 import { layoutOf, type Note } from "./route.ts";
@@ -17,7 +20,7 @@ const alias = z
   .max(60)
   .refine((value) => !/^[batp]\d+$/.test(value), "An alias must not look like an id");
 
-const boxInput = z.object({
+const boxInput = z.strictObject({
   type: z.literal("box"),
   x: coord,
   y: coord,
@@ -27,7 +30,7 @@ const boxInput = z.object({
   color,
 });
 const heads = z.enum(["none", "start", "end", "both"]);
-const arrowInput = z.object({
+const arrowInput = z.strictObject({
   type: z.literal("arrow"),
   x1: coord,
   y1: coord,
@@ -40,14 +43,14 @@ const arrowInput = z.object({
   label: z.string().max(200).optional(),
   color,
 });
-const textInput = z.object({
+const textInput = z.strictObject({
   type: z.literal("text"),
   x: coord,
   y: coord,
   text: z.string().min(1).max(500),
   color,
 });
-const pathInput = z.object({
+const pathInput = z.strictObject({
   type: z.literal("path"),
   points: z.array(z.tuple([coord, coord])).min(2).max(2000),
   color,
@@ -80,7 +83,7 @@ export const docSchema = z.object({
 export type Doc = z.infer<typeof docSchema>;
 
 const patch = z
-  .object({
+  .strictObject({
     x: coord,
     y: coord,
     w: coord.positive(),
@@ -99,11 +102,11 @@ const patch = z
   .partial();
 
 export const opSchema = z.discriminatedUnion("op", [
-  z.object({ op: z.literal("add"), element: elementInputSchema, as: alias.optional() }),
-  z.object({ op: z.literal("update"), id: ref, patch }),
-  z.object({ op: z.literal("move"), id: ref, dx: coord, dy: coord }),
-  z.object({ op: z.literal("delete"), id: ref }),
-  z.object({ op: z.literal("clear") }),
+  z.strictObject({ op: z.literal("add"), element: elementInputSchema, as: alias.optional() }),
+  z.strictObject({ op: z.literal("update"), id: ref, patch }),
+  z.strictObject({ op: z.literal("move"), id: ref, dx: coord, dy: coord }),
+  z.strictObject({ op: z.literal("delete"), id: ref }),
+  z.strictObject({ op: z.literal("clear") }),
 ]);
 export type Op = z.infer<typeof opSchema>;
 
@@ -127,8 +130,36 @@ const PATCHABLE: Record<Element["type"], readonly string[]> = {
   path: ["color"],
 };
 
-/** Applies every op or none. Returns the new doc and the ids of added elements. */
-export function applyOps(doc: Doc, ops: Op[]): { doc: Doc; added: string[] } {
+/** Checks a batch before anything in it runs. Throws one plain message naming the first problem. */
+export function parseOps(batch: unknown): Op[] {
+  const result = z.array(opSchema).min(1).max(500).safeParse(batch);
+  if (!result.success) throw new Error(plainIssue(result.error));
+  return result.data;
+}
+
+function plainIssue(error: z.ZodError): string {
+  const issue = error.issues[0]!;
+  const where = issue.path.length === 0 ? "" : ` (${issue.path.map(String).join(" › ")})`;
+  return `That change is not valid${where}: ${issue.message}`;
+}
+
+/** Names the element a document-level range error belongs to. */
+function rangeMessage(error: z.ZodError, elements: Element[]): string {
+  const issue = error.issues[0]!;
+  const index = issue.path[1];
+  const id = issue.path[0] === "elements" && typeof index === "number" ? elements[index]?.id : undefined;
+  if (id !== undefined)
+    return `That change would move ${id} past the canvas edge. Coordinates stay between -${WORLD_LIMIT} and ${WORLD_LIMIT}.`;
+  return `That change is not valid: ${issue.message}`;
+}
+
+/**
+ * Applies every op or none. Returns the new doc and the ids of added elements.
+ * The batch is checked first, and the result is checked before it is returned, so a bad batch
+ * changes nothing: the caller saves only what this returns.
+ */
+export function applyOps(doc: Doc, batch: Op[]): { doc: Doc; added: string[] } {
+  const ops = parseOps(batch);
   let elements = doc.elements.map((element) => ({ ...element }));
   let next = doc.next;
   const added: string[] = [];
@@ -175,6 +206,8 @@ export function applyOps(doc: Doc, ops: Op[]): { doc: Doc; added: string[] } {
       case "update": {
         const element = find(resolve(op.id));
         const { from: rawFrom, to: rawTo, ...rest } = op.patch;
+        if (element.type !== "arrow" && (rawFrom !== undefined || rawTo !== undefined))
+          throw new Error(`${op.id} is a ${element.type}; only an arrow has "from" and "to"`);
         const from = rawFrom == null ? rawFrom : resolve(rawFrom);
         const to = rawTo == null ? rawTo : resolve(rawTo);
         if (element.type === "arrow") {
@@ -229,7 +262,10 @@ export function applyOps(doc: Doc, ops: Op[]): { doc: Doc; added: string[] } {
         break;
     }
   }
-  return { doc: { ...doc, rev: doc.rev + 1, next, elements }, added };
+  const result: Doc = { ...doc, rev: doc.rev + 1, next, elements };
+  const checked = docSchema.safeParse(result);
+  if (!checked.success) throw new Error(rangeMessage(checked.error, elements));
+  return { doc: result, added };
 }
 
 /** Right-angle route for a from/to arrow around the other boxes. A free arrow stays a straight line. */

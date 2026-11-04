@@ -250,6 +250,26 @@ async function functional(browser) {
   }
 }
 
+// The bridge: a reply or push that does not fit the protocol is refused, not shown.
+async function bridge(browser) {
+  const { server, context, page, problems } = await openPage(browser, "light");
+  try {
+    await page.evaluate(() => window.kaganStub.corruptNext("list"));
+    await page.evaluate(() => window.kaganStub.push({ push: "changed", name: "Other", rev: 1 }));
+    const refused = await page.waitForFunction(() => document.body.innerText.includes("does not understand"), null, { timeout: 4000 }).then(() => true, () => false);
+    check("j. a reply that does not fit the protocol fails its call with a message", refused);
+    await page.evaluate(() => window.kaganStub.clearCalls());
+    await page.evaluate(() => window.kaganStub.push({ push: "changed", name: 5, rev: "x" }));
+    await page.waitForTimeout(300);
+    const after = await page.evaluate(() => window.kaganStub.calls());
+    check("j. a push that does not fit causes no call", after.length === 0, JSON.stringify(after));
+    check("j. malformed replies and pushes cause no page errors", problems.length === 0, problems.join(" | ").slice(0, 300));
+  } finally {
+    await context.close();
+    server.close();
+  }
+}
+
 // Panel behaviour that needs no drawing: the picker on reopen, the reveal after an agent edit, and the empty-state copy.
 async function panel(browser) {
   {
@@ -328,6 +348,7 @@ const browser = await chromium.launch();
 try {
   await functional(browser);
   await panel(browser);
+  await bridge(browser);
   await screenshots(browser, "light");
   await screenshots(browser, "dark");
 } finally {

@@ -1,25 +1,22 @@
 import { View } from "gpui-kit";
 import { fail, next, reply, type Job } from "kagan/jobs";
 import { post } from "kagan/panel";
-import { context, onContextChanged, openPanel, pasteIntoThread, writeClipboardPng } from "kagan/host";
+import { context, log, onContextChanged, openPanel, pasteIntoThread, writeClipboardPng } from "kagan/host";
 import { get, list, project } from "kagan/threads";
-import { z } from "zod";
-
-import { type Doc, opSchema } from "./model.ts";
-import { PANEL_ID, PNG_MAX_BYTES, type PageRequest, type PluginMessage, type ThreadRow } from "./protocol.ts";
+import { parseRequest } from "./bridge.ts";
+import { type Doc, parseOps } from "./model.ts";
+import { PANEL_ID, type PageRequest, type PluginMessage, type ThreadRow } from "./protocol.ts";
 import { edit, listNames, open, read, remove, step } from "./store.ts";
 import { changes, dump, normalizeName, shareText } from "./text.ts";
+import { PngUploads } from "./upload.ts";
 
 /** Largest Send note the panel can paste. */
 const NOTE_MAX = 4000;
 /** Most ops one canvas_edit call may carry. */
 const OPS_MAX = 500;
 
-/** Base64 of the largest PNG plus room for the padding. */
-const PNG_MAX_CHARS = Math.ceil((PNG_MAX_BYTES * 4) / 3) + 4;
-
-/** PNG chunks sent so far, by upload id. Each upload is joined on its last chunk. */
-const uploads = new Map<string, { parts: string[]; chars: number }>();
+/** Pieces of a picture the page is sending. */
+const pngUploads = new PngUploads();
 
 export default class Plugin extends View {
   init(_props: unknown, cx: { spawn(task: () => Promise<void>): void; notify(): void }): void {
@@ -59,8 +56,14 @@ async function handle(job: Job): Promise<unknown> {
     return null;
   }
   if (job.kind === "page") {
-    // Answer in the background: the page hears the result as a message, not as this reply.
-    void answer(job.message as PageRequest);
+    // Check the message first. Then answer in the background: the page hears the result as a message, not as this reply.
+    const parsed = parseRequest(job.message);
+    if (!parsed.ok) {
+      if (parsed.id !== null) await tell({ reply: parsed.id, ok: false, error: parsed.error });
+      else log("warn", parsed.error);
+      return null;
+    }
+    void answer(parsed.request);
     return null;
   }
   throw new Error(`Unknown job ${job.kind}`);
@@ -78,7 +81,7 @@ async function tool(job: Job): Promise<{ text: string; isError?: boolean }> {
     }
     if (job.name === "canvas_edit") {
       if (typeof input.name !== "string" || input.name.trim() === "") throw new Error("canvas_edit needs a name");
-      const ops = z.array(opSchema).min(1).max(OPS_MAX).parse(input.ops);
+      const ops = parseOps(input.ops);
       const name = normalizeName(input.name);
       const result = await edit(name, ops);
       await announce(result.after);
@@ -115,7 +118,7 @@ async function announce(doc: Doc): Promise<void> {
 async function answer(request: PageRequest): Promise<void> {
   try {
     const value = await call(request);
-    await tell({ reply: request.id, ok: true, value });
+    await tell({ reply: request.id, ok: true, value: value ?? {} });
   } catch (error) {
     await tell({ reply: request.id, ok: false, error: error instanceof Error ? error.message : String(error) });
   }
@@ -134,7 +137,7 @@ async function call(request: PageRequest): Promise<unknown> {
       return { threadId: current.threadId ?? null, projectId: current.projectId ?? null };
     }
     case "apply": {
-      const ops = z.array(opSchema).min(1).max(OPS_MAX).parse(request.ops);
+      const ops = parseOps(request.ops);
       const result = await edit(normalizeName(request.name), ops);
       await announce(result.after);
       return { doc: result.after, added: result.added };
@@ -164,24 +167,10 @@ async function call(request: PageRequest): Promise<unknown> {
   }
 }
 
-/** Copy as image: the page sends the PNG in chunks, and the last one puts it on the clipboard. */
+/** Copy as image: the page sends the PNG in ordered pieces, and the last one puts it on the clipboard. */
 function pngChunk(request: Extract<PageRequest, { call: "pngChunk" }>): Record<string, never> {
-  const pending = uploads.get(request.upload) ?? { parts: [], chars: 0 };
-  pending.parts.push(request.data);
-  pending.chars += request.data.length;
-  if (pending.chars > PNG_MAX_CHARS) {
-    uploads.delete(request.upload);
-    throw new Error("The picture is larger than 8 MiB.");
-  }
-  if (!request.last) {
-    uploads.set(request.upload, pending);
-    return {};
-  }
-  uploads.delete(request.upload);
-  const base64 = pending.parts.join("");
-  const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
-  if ((base64.length / 4) * 3 - padding > PNG_MAX_BYTES) throw new Error("The picture is larger than 8 MiB.");
-  writeClipboardPng(base64);
+  const base64 = pngUploads.accept(request.upload, request.index, request.last, request.data);
+  if (base64 !== null) writeClipboardPng(base64);
   return {};
 }
 

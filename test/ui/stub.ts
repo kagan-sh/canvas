@@ -10,6 +10,8 @@ const undo = new Map<string, Doc[]>();
 const redo = new Map<string, Doc[]>();
 const pngParts: { index: number; last: boolean; data: string }[] = [];
 const sent: { name: string; threadId: string; note: string }[] = [];
+const corrupt = new Set<string>();
+const calls: string[] = [];
 const THREADS = [
   { id: "thr_here", title: "This thread", status: "idle" },
   { id: "thr_other", title: "Fix the login bug", status: "running" },
@@ -36,7 +38,10 @@ function write(name: string, next: Doc) {
 
 function handle(request: Request) {
   const { id } = request;
+  calls.push(request.call);
   try {
+    // A corrupted answer for a call the test asked to break: a value that does not fit the protocol.
+    if (corrupt.delete(request.call)) return ok(id, { names: "oops" });
     switch (request.call) {
       case "open": {
         const name: string = request.name ?? "Main";
@@ -108,6 +113,16 @@ Object.assign(window, {
     },
   },
   kaganStub: {
+    corruptNext(call: string) {
+      corrupt.add(call);
+    },
+    calls: () => [...calls],
+    clearCalls() {
+      calls.length = 0;
+    },
+    push(message: unknown) {
+      dispatch(message);
+    },
     // What the plugin does when an agent calls canvas_edit: apply the ops, then push "changed".
     agentEdit(name: string, ops: unknown[]) {
       const result = applyOps(docFor(name), ops as Op[]);
