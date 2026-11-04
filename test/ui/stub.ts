@@ -62,7 +62,7 @@ function handle(request: Request) {
         undo.set(name, [...(undo.get(name) ?? []), current]);
         redo.set(name, []);
         write(name, result.doc);
-        // Like main.ts: the change is announced before the call answers.
+        // Announce the change before the call answers, as main.ts does.
         dispatch({ push: "changed", name, rev: result.doc.rev });
         ok(id, { doc: result.doc, added: result.added });
         return;
@@ -78,7 +78,7 @@ function handle(request: Request) {
         const current = docFor(name);
         from.set(name, stack);
         to.set(name, [...(to.get(name) ?? []), current]);
-        // Like the store and main.ts: a step is a new revision, announced before the call answers.
+        // An undo or redo is a new revision, as the store makes it. Announce it before the call answers, as main.ts does.
         const next = { ...previous, rev: current.rev + 1 };
         write(name, next);
         dispatch({ push: "changed", name, rev: next.rev });

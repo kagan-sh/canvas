@@ -263,7 +263,7 @@ function Canvas() {
   );
   const open = useCallback(
     (name?: string) => {
-      // Keep the same array when nothing is selected, so a reopen does not look like a selection change.
+      // Keep the same array when nothing is selected. A new empty array would look like a selection change to the effects that watch selectedIds.
       setSelectedIds((ids) => (ids.length === 0 ? ids : []));
       setEditing(null);
       refetch(name);
@@ -340,7 +340,6 @@ function Canvas() {
       else toast.error("Couldn't copy the canvas as an image", messageOf(cause));
     }
   }, [doc]);
-  // A narrow panel stacks its chrome and shortens its copy. Only a touch screen gets the big targets.
   const narrow = measured && (size.w < NARROW_CANVAS || (coarse && size.w < 1100));
   const touch = narrow && coarse;
   const fit = useCallback(() => {

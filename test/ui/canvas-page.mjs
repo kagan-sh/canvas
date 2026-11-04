@@ -325,13 +325,11 @@ async function panel(browser) {
   }
 }
 
-// Heights of the controls a person taps or types in. At a side-panel width with a mouse these stay the desktop size.
 const chrome = (page) =>
   page.evaluate(() => {
     const height = (selector) => Math.round(document.querySelector(selector)?.getBoundingClientRect().height ?? -1);
     return { tool: height(".cv-toolbar .cv-btn"), field: height(".cv-send input"), select: height(".cv-send select") };
   });
-// The drawing's own frame: where its origin sits and how far it is zoomed. A draw must not change these.
 const view = (page) =>
   page.evaluate(() => {
     const svg = document.querySelector("svg.cv-svg");
@@ -402,7 +400,7 @@ async function narrowDraw(browser, { coarse = false } = {}) {
     const detail = `before ${JSON.stringify(before)} · after ${JSON.stringify(after)} · view changes ${moves.length} · calls ${calls.join(",")}`;
     check(`k. drawing a box in a ${where} does not move or re-center the view`, sameView(before, after), detail);
     check("k. the page does not refetch its own box", !calls.includes("open") && !calls.includes("list"), calls.join(","));
-    // An arrow selects a row of options the box does not have, so the dock grows as it lands.
+    // An arrow selects a row of options a box does not have, so the dock grows once the arrow is drawn.
     await page.keyboard.press("a");
     await page.waitForTimeout(200);
     const beforeArrow = await view(page);
@@ -422,7 +420,7 @@ async function narrowDraw(browser, { coarse = false } = {}) {
   }
 }
 
-// A drawing saved before the page opened. Its first open fits it. Grabbing one of its boxes must not move the view.
+// A drawing saved before the page opens. Its first open fits it to the screen.
 async function savedDrag(browser, width) {
   const seed = { Main: [{ op: "add", element: { type: "box", x: 400, y: 200, w: 160, h: 100, label: "saved" } }] };
   const { server, context, page, problems } = await openPage(browser, "light", { seed });
@@ -459,7 +457,6 @@ async function savedDrag(browser, width) {
   }
 }
 
-// Undo of a box drawn in a 600 px panel. It must not re-center the view, and it must ask the plugin once.
 async function undoDraw(browser) {
   const { server, context, page, problems } = await openPage(browser, "light");
   try {
