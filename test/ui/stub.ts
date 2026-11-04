@@ -77,6 +77,9 @@ function handle(request: Request) {
         ok(id, { names: [...docs.keys()] });
         return;
       }
+      case "context":
+        ok(id, { threadId: "thr_here", projectId: "p1" });
+        return;
       case "threads":
         ok(id, { threads: THREADS });
         return;
@@ -105,6 +108,13 @@ Object.assign(window, {
     },
   },
   kaganStub: {
+    // What the plugin does when an agent calls canvas_edit: apply the ops, then push "changed".
+    agentEdit(name: string, ops: unknown[]) {
+      const result = applyOps(docFor(name), ops as Op[]);
+      write(name, result.doc);
+      dispatch({ push: "changed", name, rev: result.doc.rev });
+      return result.added;
+    },
     docs: () => Object.fromEntries([...docs].map(([name, doc]) => [name, doc])),
     sent: () => sent,
     pngParts: () => pngParts,

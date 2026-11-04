@@ -9,6 +9,7 @@ export type ThreadRow = { id: string; title: string; status: string };
 export type PageRequest = { id: number } & (
   | { call: "open"; threadId?: string; name?: string }
   | { call: "list" }
+  | { call: "context" }
   | { call: "apply"; name: string; ops: Op[] }
   | { call: "undo" | "redo"; name: string }
   | { call: "delete"; name: string }
@@ -28,6 +29,8 @@ export type PluginMessage =
 export type OpenValue = { name: string; doc: Doc };
 export type ApplyValue = { doc: Doc; added: string[] };
 export type ListValue = { names: string[] };
+/** The thread and project on screen right now. The page asks for it when it opens. */
+export type ContextValue = { threadId: string | null; projectId: string | null };
 /** undo and redo answer with the doc, wrapped as `{ doc }`. The page also accepts a bare doc. */
 export type StepValue = { doc: Doc };
 /** delete answers with the names that are left. */

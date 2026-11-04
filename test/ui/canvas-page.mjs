@@ -50,7 +50,7 @@ function check(name, ok, detail = "") {
   console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? `  (${detail})` : ""}`);
 }
 
-async function openPage(browser, theme) {
+async function openPage(browser, theme, { pushContext = true } = {}) {
   const server = serve(theme);
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
   const { port } = server.address();
@@ -71,7 +71,8 @@ async function openPage(browser, theme) {
     if (res.url() === `http://127.0.0.1:${port}/`) headers.value = res.headers()["content-security-policy"] ?? "";
   });
   await page.goto(`http://127.0.0.1:${port}/`);
-  await page.evaluate(() => window.dispatchEvent(new CustomEvent("kagan", { detail: { push: "context", threadId: "thr_here", projectId: "p1" } })));
+  // A reopened panel gets no push: the page must ask for the thread on screen itself.
+  if (pushContext) await page.evaluate(() => window.dispatchEvent(new CustomEvent("kagan", { detail: { push: "context", threadId: "thr_here", projectId: "p1" } })));
   await page.waitForSelector("svg.cv-svg");
   await page.waitForTimeout(150);
   return { server, context, page, problems, fonts, headers };
@@ -249,6 +250,62 @@ async function functional(browser) {
   }
 }
 
+// Panel behaviour that needs no drawing: the picker on reopen, the reveal after an agent edit, and the empty-state copy.
+async function panel(browser) {
+  {
+    const { server, context, page, problems } = await openPage(browser, "light", { pushContext: false });
+    try {
+      const picked = await page
+        .waitForFunction(() => document.querySelector("select[aria-label='Send to']")?.value === "thr_here", null, { timeout: 4000 })
+        .then(() => true, () => false);
+      const label = await page.evaluate(() => document.querySelector("select[aria-label='Send to']")?.selectedOptions[0]?.textContent ?? "");
+      check("h. a reopened page with no context push shows the thread on screen in the picker", picked && /This thread/.test(label), label || "no picker value");
+      check("h. reopened page has no console errors", problems.length === 0, problems.join(" | ").slice(0, 300));
+    } finally {
+      await context.close();
+      server.close();
+    }
+  }
+  {
+    const { server, context, page, problems } = await openPage(browser, "light");
+    try {
+      // Wait for the empty canvas to load first, so the first fit has happened before the agent edits.
+      await page.waitForSelector(".cv-empty-line");
+      await page.waitForTimeout(200);
+      // The person pans away first. Then the agent's work lands far outside the view, and the page must bring it back.
+      await page.mouse.move(600, 400);
+      await page.mouse.wheel(0, 300);
+      await page.waitForTimeout(200);
+      await page.evaluate(() => window.kaganStub.agentEdit("Main", [{ op: "add", element: { type: "box", x: 4000, y: 3000, w: 160, h: 80, label: "agent" } }]));
+      await page.waitForFunction(() => document.querySelectorAll("svg.cv-svg [data-id]").length === 1, null, { timeout: 4000 });
+      await page.waitForTimeout(250);
+      const inside = await page.evaluate(() => {
+        const frame = document.querySelector("svg.cv-svg").getBoundingClientRect();
+        const box = document.querySelector("svg.cv-svg [data-id]").getBoundingClientRect();
+        return { ok: box.left >= frame.left && box.right <= frame.right && box.top >= frame.top && box.bottom <= frame.bottom, box: [box.left, box.top, box.right, box.bottom].map(Math.round), frame: [frame.left, frame.top, frame.right, frame.bottom].map(Math.round) };
+      });
+      check("h. an agent edit far off screen is brought into view", inside.ok, JSON.stringify({ box: inside.box, frame: inside.frame }));
+      check("h. the agent-edit reveal has no console errors", problems.length === 0, problems.join(" | ").slice(0, 300));
+    } finally {
+      await context.close();
+      server.close();
+    }
+  }
+  {
+    const { server, context, page, problems } = await openPage(browser, "light");
+    try {
+      await page.setViewportSize({ width: 360, height: 760 });
+      await page.waitForTimeout(300);
+      const line = await page.locator(".cv-empty-line").first().innerText();
+      check("i. the empty canvas names ⌘ and no longer says pinch", line.includes("⌘") && !/pinch/i.test(line), line);
+      check("i. the empty-state copy has no console errors", problems.length === 0, problems.join(" | ").slice(0, 300));
+    } finally {
+      await context.close();
+      server.close();
+    }
+  }
+}
+
 async function screenshots(browser, theme) {
   fs.mkdirSync(shotDir, { recursive: true });
   const { server, context, page, problems } = await openPage(browser, theme);
@@ -270,6 +327,7 @@ async function screenshots(browser, theme) {
 const browser = await chromium.launch();
 try {
   await functional(browser);
+  await panel(browser);
   await screenshots(browser, "light");
   await screenshots(browser, "dark");
 } finally {

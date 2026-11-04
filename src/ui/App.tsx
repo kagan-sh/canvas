@@ -39,7 +39,7 @@ import {
   ZoomInIcon,
   ZoomOutIcon,
 } from "../icons.tsx";
-import type { ApplyValue, ListValue, OpenValue, ThreadsValue, ThreadRow } from "../protocol.ts";
+import type { ApplyValue, ContextValue, ListValue, OpenValue, ThreadsValue, ThreadRow } from "../protocol.ts";
 import { call, onPush } from "./client.ts";
 import {
   HANDLES,
@@ -97,6 +97,7 @@ const api = {
   open: (args: { threadId?: string; name?: string }) => call<OpenValue>({ call: "open", ...args }),
   list: () => call<ListValue>({ call: "list" }),
   threads: (threadId: string) => call<ThreadsValue>({ call: "threads", threadId }),
+  context: () => call<ContextValue>({ call: "context" }),
 };
 
 function Canvas() {
@@ -134,6 +135,8 @@ function Canvas() {
   const [editing, setEditing] = useState<Editing | null>(null);
   const [view, setView] = useState<View>({ x: -DEFAULT_VIEW_WIDTH / 2, y: -DEFAULT_VIEW_HEIGHT / 2, scale: 1 });
   const [size, setSize] = useState({ w: DEFAULT_VIEW_WIDTH, h: DEFAULT_VIEW_HEIGHT });
+  const sizeRef = useRef(size);
+  sizeRef.current = size;
   const [measured, setMeasured] = useState(false);
   const svgRef = useRef<SVGSVGElement>(null);
   const frameRef = useRef<HTMLDivElement>(null);
@@ -143,6 +146,8 @@ function Canvas() {
   const fittedRef = useRef<string | null>(null);
   // A pan or zoom is the person's own framing. Until then, a resize refits.
   const userMoved = useRef(false);
+  // Set when a push says an agent changed the canvas, so the next load brings that work into view.
+  const revealRef = useRef(false);
   const spaceRef = useRef(false);
   // The doc as last shown, so back-to-back edits build on each other before React re-renders.
   const docRef = useRef<Doc | null>(null);
@@ -209,6 +214,22 @@ function Canvas() {
     api.list().then((r) => setNames(r.names), fail);
   }, []);
 
+  // Pans, and zooms out if needed, so the elements an agent just changed are on screen.
+  const revealElements = useCallback((before: Doc, after: Doc) => {
+    const was = new Map(before.elements.map((element) => [element.id, JSON.stringify(element)]));
+    const changed = after.elements.filter((element) => was.get(element.id) !== JSON.stringify(element));
+    const bounds = contentBounds({ ...after, elements: changed });
+    if (bounds === null) return;
+    const { w, h } = sizeRef.current;
+    setView((current) => {
+      const scale = current.scale;
+      const inside = bounds.x >= current.x && bounds.y >= current.y && bounds.x + bounds.w <= current.x + w / scale && bounds.y + bounds.h <= current.y + h / scale;
+      if (inside) return current;
+      if (bounds.w > w / scale || bounds.h > h / scale) return fitView(bounds, w, h);
+      return { scale, x: bounds.x + bounds.w / 2 - w / scale / 2, y: bounds.y + bounds.h / 2 - h / scale / 2 };
+    });
+  }, []);
+
   const refetch: (name?: string) => void = useCallback(
     (name?: string) => {
       const epoch = epochRef.current;
@@ -230,11 +251,15 @@ function Canvas() {
           staleRef.current = false;
         }
         nameRef.current = next.name;
+        const reveal = revealRef.current;
+        revealRef.current = false;
+        const before = docRef.current;
         show(next.doc);
+        if (reveal && before !== null && before.name === next.doc.name) revealElements(before, next.doc);
       }, fail);
       refreshNames();
     },
-    [show, refreshNames],
+    [show, refreshNames, revealElements],
   );
   const open = useCallback(
     (name?: string) => {
@@ -252,25 +277,37 @@ function Canvas() {
     [open],
   );
 
-  // Start on the default canvas. The thread arrives in a `context` push.
+  // The thread on screen. The page asks for it when it opens, since a push only comes on a change.
+  const takeContext = useCallback(
+    (threadOnScreen: string | null) => {
+      threadRef.current = threadOnScreen;
+      setThreadId(threadOnScreen);
+      setTarget(threadOnScreen ?? "");
+      if (threadOnScreen === null) setThreads([]);
+      else api.threads(threadOnScreen).then((r) => setThreads(r.threads), (cause) => toast.error(messageOf(cause)));
+      if (!pickedRef.current) open();
+    },
+    [open],
+  );
+
+  // Start on the default canvas, then take the thread on screen.
   useEffect(() => {
     open();
-  }, [open]);
+    api.context().then((current) => takeContext(current.threadId), (cause) => toast.error(messageOf(cause)));
+  }, [open, takeContext]);
   useEffect(
     () =>
       onPush((push) => {
         if (push.push === "context") {
-          threadRef.current = push.threadId;
-          setThreadId(push.threadId);
-          setTarget(push.threadId ?? "");
-          if (push.threadId === null) setThreads([]);
-          else api.threads(push.threadId).then((r) => setThreads(r.threads), fail);
-          if (!pickedRef.current) open();
+          takeContext(push.threadId);
         } else if (push.push === "changed") {
           const name = nameRef.current;
           if (name !== null && push.name === name) {
             seenRevRef.current = Math.max(seenRevRef.current, push.rev);
-            if (pendingFor(name) === 0 && push.rev !== docRef.current?.rev) refetch(name);
+            if (pendingFor(name) === 0 && push.rev !== docRef.current?.rev) {
+              revealRef.current = true;
+              refetch(name);
+            }
           } else refreshNames();
         } else if (push.push === "deleted") {
           if (push.name === nameRef.current) {
@@ -279,7 +316,7 @@ function Canvas() {
           } else refreshNames();
         }
       }),
-    [open, refetch, refreshNames],
+    [takeContext, refetch, refreshNames],
   );
 
   // A PNG of the whole drawing on the clipboard, for a pull request, an issue, or chat outside kagan.
@@ -1069,7 +1106,7 @@ function Canvas() {
       {doc !== null && doc.elements.length === 0 && editing === null && drag === null ? (
         <div className="cv-empty" style={{ fontFamily: FONT_FAMILY }}>
           <div className="cv-empty-title">Pick a tool &amp; start drawing!</div>
-          <div className="cv-empty-line">{narrow ? "Pinch to zoom. Two fingers move the canvas." : "Agents draw here too. Send the canvas to a thread below."}</div>
+          <div className="cv-empty-line">{narrow ? "Hold ⌘ and scroll to zoom. Two fingers move the canvas." : "Agents draw here too. Send the canvas to a thread below."}</div>
         </div>
       ) : null}
 

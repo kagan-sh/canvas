@@ -129,6 +129,10 @@ async function call(request: PageRequest): Promise<unknown> {
     }
     case "list":
       return { names: await listNames() };
+    case "context": {
+      const current = context();
+      return { threadId: current.threadId ?? null, projectId: current.projectId ?? null };
+    }
     case "apply": {
       const ops = z.array(opSchema).min(1).max(OPS_MAX).parse(request.ops);
       const result = await edit(normalizeName(request.name), ops);
