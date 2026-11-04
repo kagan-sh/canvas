@@ -1,0 +1,128 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { applyOps, arrowEnds, emptyDoc, exportText, layoutNotes, layoutReport, type Arrow } from "./model.ts";
+
+test("ids increase and are never reused; deleting a box deletes its arrows", () => {
+  const first = applyOps(emptyDoc("t"), [
+    { op: "add", element: { type: "box", x: 0, y: 0, w: 100, h: 50, label: "web" } },
+    { op: "add", element: { type: "box", x: 300, y: 0, w: 100, h: 50, label: "db" } },
+    { op: "add", element: { type: "arrow", x1: 0, y1: 0, x2: 0, y2: 0, from: "b1", to: "b2" } },
+  ]);
+  assert.deepEqual(first.added, ["b1", "b2", "a3"]);
+  assert.equal(first.doc.rev, 1);
+
+  const second = applyOps(first.doc, [{ op: "delete", id: "b2" }]);
+  assert.deepEqual(second.doc.elements.map((element) => element.id), ["b1"]);
+
+  const third = applyOps(second.doc, [{ op: "add", element: { type: "text", x: 1, y: 1, text: "hi" } }]);
+  assert.deepEqual(third.added, ["t4"]);
+});
+
+test("a failing op applies nothing", () => {
+  const doc = emptyDoc("t");
+  assert.throws(() =>
+    applyOps(doc, [
+      { op: "add", element: { type: "box", x: 0, y: 0, w: 10, h: 10 } },
+      { op: "delete", id: "b99" },
+    ]),
+  );
+  assert.equal(doc.elements.length, 0);
+});
+
+test("attached arrow ends snap to box borders and follow a move", () => {
+  const { doc } = applyOps(emptyDoc("t"), [
+    { op: "add", element: { type: "box", x: 0, y: 0, w: 100, h: 100 } },
+    { op: "add", element: { type: "box", x: 300, y: 0, w: 100, h: 100 } },
+    { op: "add", element: { type: "arrow", x1: 0, y1: 0, x2: 0, y2: 0, from: "b1", to: "b2" } },
+  ]);
+  const arrow = doc.elements[2] as Arrow;
+  assert.deepEqual(arrowEnds(arrow, doc.elements), { x1: 100, y1: 50, x2: 300, y2: 50 });
+
+  const moved = applyOps(doc, [{ op: "move", id: "b2", dx: 0, dy: 200 }]).doc;
+  const ends = arrowEnds(moved.elements[2] as Arrow, moved.elements);
+  assert.equal(ends.x2, 300);
+  assert.ok(ends.y2 > 200 && ends.y2 < 300);
+  assert.match(exportText(moved), /^a3 arrow .* b1->b2$/m);
+});
+
+test("update sets a field the element does not have yet, and refuses a wrong one", () => {
+  const { doc } = applyOps(emptyDoc("t"), [
+    { op: "add", element: { type: "box", x: 10, y: 10, w: 100, h: 50 } },
+  ]);
+  const labelled = applyOps(doc, [
+    { op: "update", id: "b1", patch: { label: "web", color: "red" } },
+  ]).doc;
+  assert.match(exportText(labelled), /b1 box 10,10 100x50 red "web"/);
+
+  assert.throws(
+    () => applyOps(labelled, [{ op: "update", id: "b1", patch: { text: "nope" } }]),
+    /b1 is a box; it has no "text"/,
+  );
+});
+
+test("a batch names what it creates and connects it in the same call", () => {
+  const { doc, added } = applyOps(emptyDoc("t"), [
+    { op: "add", element: { type: "box", x: 0, y: 0, w: 200, h: 100, label: "web" }, as: "web" },
+    { op: "add", element: { type: "box", x: 500, y: 0, w: 200, h: 100, label: "db" }, as: "db" },
+    { op: "add", element: { type: "arrow", x1: 0, y1: 0, x2: 0, y2: 0, from: "web", to: "db" } },
+    { op: "update", id: "web", patch: { color: "green" } },
+  ]);
+  assert.deepEqual(added, ["b1", "b2", "a3"]);
+  assert.match(exportText(doc), /^a3 arrow .* b1->b2$/m);
+  assert.match(exportText(doc), /^b1 box .* green "web"$/m);
+
+  assert.throws(
+    () => applyOps(emptyDoc("t"), [{ op: "update", id: "ghost", patch: { color: "red" } }]),
+    /no element ghost/,
+  );
+});
+
+test("an arrow with no heads reads as a line and keeps its attachment", () => {
+  const { doc } = applyOps(emptyDoc("t"), [
+    { op: "add", as: "a", element: { type: "box", x: 0, y: 0, w: 200, h: 100 } },
+    { op: "add", as: "b", element: { type: "box", x: 500, y: 0, w: 200, h: 100 } },
+    { op: "add", element: { type: "arrow", x1: 0, y1: 0, x2: 0, y2: 0, from: "a", to: "b", heads: "none" } },
+    { op: "add", element: { type: "arrow", x1: 10, y1: 300, x2: 400, y2: 300, heads: "both" } },
+  ]);
+  const text = exportText(doc);
+  assert.match(text, /^a3 line 200,50 -> 500,50 b1->b2$/m);
+  assert.match(text, /^a4 arrow 10,300 -> 400,300 heads both$/m);
+
+  const plain = applyOps(doc, [{ op: "update", id: "a4", patch: { heads: "none" } }]).doc;
+  assert.match(exportText(plain), /^a4 line /m);
+});
+
+test("a long box label stays the authored size and reports clipped", () => {
+  const { doc } = applyOps(emptyDoc("t"), [
+    {
+      op: "add",
+      element: {
+        type: "box",
+        x: 0,
+        y: 0,
+        w: 200,
+        h: 50,
+        label: "Read Entra Graph signInActivity which tenants cannot buy",
+      },
+    },
+  ]);
+  const box = doc.elements[0];
+  assert.equal(box?.type, "box");
+  if (box?.type !== "box") return;
+  assert.equal(box.h, 50);
+  assert.match(layoutReport(layoutNotes(doc)), /b1 label clipped/);
+});
+
+test("no element ever carries an undefined value: the rpc boundary refuses one", () => {
+  const { doc } = applyOps(emptyDoc("t"), [
+    { op: "add", as: "a", element: { type: "box", x: 0, y: 0, w: 100, h: 100 } },
+    { op: "add", as: "b", element: { type: "box", x: 400, y: 0, w: 100, h: 100 } },
+    { op: "add", element: { type: "arrow", x1: 10, y1: 200, x2: 300, y2: 200 } },
+    { op: "add", element: { type: "arrow", x1: 0, y1: 0, x2: 0, y2: 0, from: "a", to: "b" } },
+  ]);
+  const detached = applyOps(doc, [{ op: "update", id: "a4", patch: { from: null, to: null } }]).doc;
+  for (const element of detached.elements)
+    for (const [key, value] of Object.entries(element))
+      assert.notEqual(value, undefined, `${element.id}.${key} is undefined`);
+  assert.equal(JSON.parse(JSON.stringify(detached)).elements.length, 4);
+});
