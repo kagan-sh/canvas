@@ -263,7 +263,7 @@ function Canvas() {
   );
   const open = useCallback(
     (name?: string) => {
-      // A fresh array would read as a selection change to the effects watching selectedIds.
+      // Keep the empty array when nothing is selected: the effects watching selectedIds treat a new one as a change.
       setSelectedIds((ids) => (ids.length === 0 ? ids : []));
       setEditing(null);
       refetch(name);
