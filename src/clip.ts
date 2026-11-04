@@ -53,7 +53,6 @@ export function pasteOps(clip: Element[], dx: number, dy: number): Op[] {
   });
 }
 
-/** Where the middle of the clip sits. */
 export function clipCenter(clip: Element[]): { x: number; y: number } {
   const bounds = contentBounds({ ...emptyDoc(""), elements: clip });
   return bounds === null ? { x: 0, y: 0 } : { x: bounds.x + bounds.w / 2, y: bounds.y + bounds.h / 2 };
@@ -61,7 +60,7 @@ export function clipCenter(clip: Element[]): { x: number; y: number } {
 
 const clipSchema = z.object({ bbCanvas: z.literal(1), elements: z.array(elementSchema).min(1) });
 
-/** The system clipboard carries the clip as JSON, so a copy survives a panel reload or another canvas. */
+/** The clipboard holds this JSON. The `bbCanvas: 1` tag lets decodeClip tell a copied clip from other text. */
 export function encodeClip(clip: Element[]): string {
   return JSON.stringify({ bbCanvas: 1, elements: clip });
 }

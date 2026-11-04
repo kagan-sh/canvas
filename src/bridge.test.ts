@@ -43,7 +43,7 @@ test("an in-order picture joins its pieces on the last one, and a repeat index i
   const uploads = new PngUploads();
   assert.equal(uploads.accept("u", 0, false, "QUJD"), null);
   assert.equal(uploads.accept("u", 1, true, "REVG"), "QUJDREVG");
-  // The upload is finished, so a stray piece 1 starts nothing: a new upload must begin at 0.
+  // The upload finished, so a new piece 1 under the same id is out of order: a new upload must begin at 0.
   assert.throws(() => uploads.accept("u", 1, true, "REVG"), /expected piece 0, got 1/);
 });
 

@@ -46,7 +46,7 @@ export function boxLabelLines(label: string, w: number): string[] {
   return wrapLines(label, Math.max(LABEL_FONT, w - BOX_PAD * 2), LABEL_FONT);
 }
 
-/** Lines that actually fit inside the box. Extra lines are dropped, as herdr clips. */
+/** Lines that fit inside the box. Lines past its height are dropped. */
 export function visibleBoxLines(label: string, w: number, h: number): string[] {
   const lines = boxLabelLines(label, w);
   const maxLines = Math.max(1, Math.floor((h - BOX_PAD * 2) / LINE_H));
@@ -83,7 +83,7 @@ export function textBounds(x: number, y: number, text: string): Rect {
   };
 }
 
-/** Only the inked part of textBounds: what a person sees collide. */
+/** The inked part of textBounds. Collision checks use this, since that is what a person sees. */
 export function textInk(x: number, y: number, text: string): Rect {
   const bounds = textBounds(x, y, text);
   const top = y - LABEL_FONT * INK_TOP;

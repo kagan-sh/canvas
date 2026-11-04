@@ -66,7 +66,7 @@ test("the tools diagram that came out mangled now draws cleanly, and the one lab
     assert.ok(orthogonal(path), `${a.id} is not right-angled`);
     for (const b of boxes) if (b.id !== a.from && b.id !== a.to) assert.ok(!enters(path, b), `${a.id} runs through ${b.id}`);
   }
-  // a237 (BullMQ to features) used to cut through the outbox listener and ride a238's line.
+  // a237 (BullMQ to features) must not cut through the outbox listener (b217) or ride a238's line.
   assert.ok(!enters(layout.routes.get("a237")!, boxes.find((b) => b.id === "b217")!));
   for (let i = 0; i < arrows.length; i++)
     for (let j = i + 1; j < arrows.length; j++)
@@ -76,7 +76,7 @@ test("the tools diagram that came out mangled now draws cleanly, and the one lab
   for (let i = 0; i < labels.length; i++)
     for (let j = i + 1; j < labels.length; j++) assert.ok(!overlap(labels[i]!, labels[j]!), "two labels collide");
   assert.ok(layout.labels.has("a237") && layout.labels.has("a238"));
-  // t239 and t240 no longer wrap onto each other; the title stays one line.
+  // t239 and t240 must not overlap, and a234's label is the only note.
   assert.deepEqual(notes(toolsDiagram), [`a234 label "add job" hidden: needs 99px of clear line`]);
 });
 

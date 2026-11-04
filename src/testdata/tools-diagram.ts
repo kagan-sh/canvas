@@ -1,7 +1,6 @@
 import type { Element } from "../model.ts";
 
-/** The "TOOLS AND HOW THEY TALK" diagram as an agent drew it on apm-work, before the router
- * avoided boxes: t239 sat on t240, a237 ran through b217, and a237 rode a238's line. */
+/** A diagram an agent drew on apm-work. route.test.ts checks that its text, arrows and boxes do not collide. */
 export const toolsDiagram: Element[] = [
   { id: "t210", type: "text", x: 5400, y: 1100, text: "TOOLS AND HOW THEY TALK (inside one regional API container)" },
   { id: "b211", type: "box", x: 5400, y: 1160, w: 320, h: 80, label: "Coach tools (React)", color: "blue" },

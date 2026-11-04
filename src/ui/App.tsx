@@ -68,7 +68,7 @@ import { toast, Toasts } from "./toast.tsx";
 import { embeddedFontCss, pngFromSvg, TooLarge, uploadPng } from "./png.ts";
 import { useCoarsePointer, useTheme } from "./theme.ts";
 
-/** The tools and keys of the drawing tool this page follows, less the shapes the canvas does not model. */
+/** Toolbar tools with their keys. Shapes the canvas does not model are left out. */
 const TOOLS: { id: Tool; label: string; key: string; digit?: string; Icon: () => React.JSX.Element }[] = [
   { id: "hand", label: "Hand (panning tool)", key: "h", Icon: HandIcon },
   { id: "select", label: "Selection", key: "v", digit: "1", Icon: SelectIcon },
@@ -290,7 +290,6 @@ function Canvas() {
     [open],
   );
 
-  // Start on the default canvas, then take the thread on screen.
   useEffect(() => {
     open();
     api.context().then((current) => takeContext(current.threadId), (cause) => toast.error(messageOf(cause)));
@@ -437,7 +436,6 @@ function Canvas() {
         zoomAt(rect, event.clientX, event.clientY, (scale) => scale * Math.exp(-event.deltaY / 100));
         return;
       }
-      // Shift turns a vertical wheel sideways.
       const sideways = event.shiftKey && event.deltaX === 0;
       const dx = sideways ? event.deltaY : event.deltaX;
       const dy = sideways ? 0 : event.deltaY;
@@ -532,7 +530,6 @@ function Canvas() {
     const element = elements.find((e) => e.id === current.id);
     if (element === undefined) return;
     if (element.type === "text") {
-      // A text element emptied in the editor is dropped.
       if (text === "") void apply([{ op: "delete", id: element.id }]);
       else if (text !== element.text) void apply([{ op: "update", id: element.id, patch: { text } }]);
     } else if (element.type === "box") {

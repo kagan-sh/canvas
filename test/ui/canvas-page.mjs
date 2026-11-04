@@ -124,14 +124,12 @@ async function drawDiagram(page) {
 async function functional(browser) {
   const { server, context, page, problems, fonts, headers } = await openPage(browser, "light");
   try {
-    // a. The note field takes focus and typing.
     await page.click("input[aria-label='Note for the agent']");
     await page.keyboard.type("hello there");
     const note = await page.inputValue("input[aria-label='Note for the agent']");
     const focused = await page.evaluate(() => document.activeElement?.getAttribute("aria-label"));
     check("a. note field: click focuses it and typing writes into it", note === "hello there" && focused === "Note for the agent", `value="${note}", focus="${focused}"`);
 
-    // b. Keys.
     await page.mouse.click(200, 620);
     const keyTools = [
       ["r", "Rectangle"],
@@ -162,7 +160,6 @@ async function functional(browser) {
     const fitted = await zoomLabel(page);
     check("b. Shift+1 zooms to fit (zoom label goes back to 100% on an empty canvas)", zoomed === "110%" && fitted === "100%", `${zoomed} then ${fitted}`);
 
-    // c. Box, arrow, label, undo.
     await page.keyboard.press("v");
     await page.keyboard.press("r");
     await drag(page, BOX_A.from, BOX_A.to);
@@ -177,7 +174,6 @@ async function functional(browser) {
     await page.waitForFunction(() => ![...document.querySelectorAll("svg.cv-svg text")].some((t) => t.textContent === "yes"));
     check("c. Cmd+Z removes only the arrow label", (await boxCount(page)) === 3);
 
-    // b. Select, duplicate, nudge, delete.
     await page.keyboard.press("v");
     await page.mouse.click(360, 290);
     await page.keyboard.press("Meta+d");
@@ -198,7 +194,7 @@ async function functional(browser) {
     await waitCount(page, 3);
     check("b. Delete removes the selection", (await boxCount(page)) === 3);
 
-    // Undo the nudge and the deletion, then clear by Delete on the marquee selection.
+    // Undo the nudge and the deletion. Then Cmd+A and Delete empty the canvas.
     await page.keyboard.press("Meta+z");
     await page.keyboard.press("Meta+z");
     await waitCount(page, 4);
@@ -208,7 +204,6 @@ async function functional(browser) {
     await waitCount(page, 0);
     check("b. Cmd+A then Delete empties the canvas", (await boxCount(page)) === 0);
 
-    // Copy image: the page sends PNG pieces through the plugin.
     await drawDiagram(page);
     await page.locator("[aria-label='Main menu']").click();
     await page.getByRole("menuitem", { name: "Copy as image" }).click();
@@ -220,7 +215,6 @@ async function functional(browser) {
     const ordered = parts.every((p, i) => p.index === i) && parts.at(-1).last && parts.slice(0, -1).every((p) => !p.last);
     check("f. Copy as image sends a PNG in ordered pieces", isPng && ordered, `${parts.length} piece(s), ${bytes.length} bytes`);
 
-    // Send: the note and the command go to the chosen thread.
     await page.locator("select[aria-label='Send to']").selectOption("thr_other");
     await page.fill("input[aria-label='Note for the agent']", "Tidy the labels");
     await page.locator("button", { hasText: /^Send$/ }).click();
@@ -230,7 +224,6 @@ async function functional(browser) {
     const sendCaption = await page.locator(".cv-caption").innerText();
     check("f. Send panel says it pastes without pressing Enter", /Pastes your note/.test(sendCaption), sendCaption);
 
-    // Delete asks once; Keep canvas leaves it alone.
     await page.locator("[aria-label='Main menu']").click();
     await page.getByRole("menuitem", { name: "Delete this canvas" }).click();
     const askedOnce = await page.getByRole("alertdialog").count();
@@ -238,7 +231,6 @@ async function functional(browser) {
     const kept = await page.evaluate(() => Object.keys(window.kaganStub.docs()).includes("Main"));
     check("f. Delete asks, and Keep canvas leaves it", askedOnce === 1 && kept);
 
-    // Fonts load from the page itself.
     await page.evaluate(() => document.fonts.load("500 16px Nunito"));
     const fontOk = await page.evaluate(() => [...document.fonts].some((f) => f.family.includes("Nunito") && f.status === "loaded"));
     check("d. Nunito loads from the page", fontOk && fonts.includes(200), `font responses=${fonts.join(",") || "none"}`);
@@ -250,7 +242,6 @@ async function functional(browser) {
   }
 }
 
-// The bridge: a reply or push that does not fit the protocol is refused, not shown.
 async function bridge(browser) {
   const { server, context, page, problems } = await openPage(browser, "light");
   try {
@@ -270,7 +261,6 @@ async function bridge(browser) {
   }
 }
 
-// Panel behaviour that needs no drawing: the picker on reopen, the reveal after an agent edit, and the empty-state copy.
 async function panel(browser) {
   {
     const { server, context, page, problems } = await openPage(browser, "light", { pushContext: false });

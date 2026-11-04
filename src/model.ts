@@ -280,7 +280,6 @@ export function arrowLabelRect(arrow: Arrow, elements: Element[]): Rect | null {
   return layout.owns(arrow) ? (layout.labels.get(arrow.id) ?? null) : null;
 }
 
-/** First and last points of the route. */
 export function arrowEnds(arrow: Arrow, elements: Element[]): { x1: number; y1: number; x2: number; y2: number } {
   const points = arrowPoints(arrow, elements);
   const start = points[0]!;

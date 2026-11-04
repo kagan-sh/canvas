@@ -191,7 +191,6 @@ body {
   font-size: 16px;
 }
 
-/* Main menu. */
 .cv-scrim {
   position: absolute;
   inset: 0;
@@ -291,7 +290,6 @@ body {
   outline: 2px solid var(--accent);
 }
 
-/* Style dock, above the bottom bar. */
 .cv-dock {
   position: absolute;
   left: 12px;
@@ -368,7 +366,6 @@ body {
   pointer-events: auto;
 }
 
-/* Bottom bar: zoom, undo, and Send. */
 .cv-bottom {
   display: flex;
   flex-wrap: wrap;
@@ -447,7 +444,6 @@ body {
   font-size: 11px;
 }
 
-/* Confirm delete. */
 .cv-modal {
   position: absolute;
   inset: 0;
@@ -527,7 +523,6 @@ body {
   font-size: 12px;
 }
 
-/* Text editor laid over the drawing. */
 .cv-editor {
   position: absolute;
   z-index: 10;
@@ -543,7 +538,6 @@ body {
   font-weight: 500;
 }
 
-/* Narrow panels: bigger targets. */
 .cv-narrow .cv-key,
 .cv-narrow .cv-shortcut {
   display: none;

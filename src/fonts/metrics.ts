@@ -28,7 +28,7 @@ export function advance(char: string): number {
   return OTHER[char] ?? (code < 0x2000 ? 600 : 1000);
 }
 
-/** The line box, in em. */
+/** Ascent and descent of the line box, in em. */
 export const ASCENT = 1.011;
 export const DESCENT = 0.353;
 /** Where ink actually reaches, in em: the top of `l` and `H`, the bottom of `g` and `p`. */

@@ -10,7 +10,6 @@ export function summary(doc: Doc): string {
 
 export const shellWord = (word: string) => (/^[\w.][\w.-]*$/.test(word) ? word : `'${word.replace(/'/g, "'\\''")}'`);
 
-/** The whole canvas as text: summary, one line per element, then the layout notes. */
 export function dump(doc: Doc): string {
   return [summary(doc), exportText(doc), layoutReport(layoutNotes(doc))].filter((part) => part !== "").join("\n\n");
 }
