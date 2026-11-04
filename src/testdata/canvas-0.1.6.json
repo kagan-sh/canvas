@@ -1,0 +1,76 @@
+{
+  "doc": {
+    "name": "Team Board",
+    "rev": 1,
+    "next": 7,
+    "elements": [
+      {
+        "type": "box",
+        "x": 0,
+        "y": 0,
+        "w": 200,
+        "h": 80,
+        "label": "web",
+        "color": "blue",
+        "id": "b1"
+      },
+      {
+        "type": "box",
+        "x": 320,
+        "y": 0,
+        "w": 200,
+        "h": 80,
+        "label": "api",
+        "id": "b2"
+      },
+      {
+        "type": "arrow",
+        "x1": 200,
+        "y1": 40,
+        "x2": 320,
+        "y2": 40,
+        "from": "b1",
+        "to": "b2",
+        "label": "jobs",
+        "id": "a3"
+      },
+      {
+        "type": "text",
+        "x": 0,
+        "y": 140,
+        "text": "Notes under the diagram",
+        "id": "t4"
+      },
+      {
+        "type": "path",
+        "points": [
+          [
+            10,
+            300
+          ],
+          [
+            40,
+            320
+          ],
+          [
+            80,
+            310
+          ]
+        ],
+        "color": "red",
+        "id": "p5"
+      },
+      {
+        "type": "arrow",
+        "x1": 0,
+        "y1": 400,
+        "x2": 100,
+        "y2": 400,
+        "heads": "none",
+        "id": "a6"
+      }
+    ]
+  },
+  "history": [],
+  "future": []
+}
