@@ -50,7 +50,7 @@ function check(name, ok, detail = "") {
   console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? `  (${detail})` : ""}`);
 }
 
-async function openPage(browser, theme, { pushContext = true, coarse = false } = {}) {
+async function openPage(browser, theme, { pushContext = true, coarse = false, seed } = {}) {
   const server = serve(theme);
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
   const { port } = server.address();
@@ -65,6 +65,7 @@ async function openPage(browser, theme, { pushContext = true, coarse = false } =
   page.on("response", (res) => {
     if (res.url().endsWith(".woff2")) fonts.push(res.status());
   });
+  if (seed) await page.addInitScript(`window.__seed = ${JSON.stringify(seed)};`);
   await page.addInitScript({ content: stubJs });
   // A touch screen: the page reads "(pointer: coarse)" as matching. Set before the page loads.
   if (coarse) {
@@ -421,6 +422,65 @@ async function narrowDraw(browser, { coarse = false } = {}) {
   }
 }
 
+// A drawing saved before the page opened. Its first open fits it. Grabbing one of its boxes must not move the view.
+async function savedDrag(browser, width) {
+  const seed = { Main: [{ op: "add", element: { type: "box", x: 400, y: 200, w: 160, h: 100, label: "saved" } }] };
+  const { server, context, page, problems } = await openPage(browser, "light", { seed });
+  try {
+    await page.setViewportSize({ width, height: 760 });
+    await page.waitForFunction(() => document.querySelectorAll("svg.cv-svg [data-id]").length >= 1, null, { timeout: 4000 }).catch(async (error) => {
+      const state = await page.evaluate(() => ({ count: document.querySelectorAll("svg.cv-svg [data-id]").length, svg: document.querySelector("svg.cv-svg")?.innerHTML.slice(0, 300) ?? null, calls: window.kaganStub?.calls() ?? null }));
+      throw new Error(`seeded box not shown: ${JSON.stringify(state).slice(0, 600)} ${problems.join(" | ").slice(0, 300)} ${error.message.slice(0, 80)}`);
+    });
+    await page.waitForTimeout(400);
+    const before = await view(page);
+    const grab = await page.evaluate(() => {
+      const r = document.querySelector("svg.cv-svg [data-id]").getBoundingClientRect();
+      const x = r.left + r.width / 2;
+      const y = r.top + r.height / 2;
+      return { x, y, onBox: document.elementFromPoint(x, y)?.closest("[data-id]") !== null };
+    });
+    await page.evaluate(() => window.kaganStub.clearCalls());
+    await drag(page, { x: grab.x, y: grab.y }, { x: grab.x + 60, y: grab.y });
+    await page.waitForTimeout(400);
+    const after = await view(page);
+    const calls = await page.evaluate(() => window.kaganStub.calls());
+    check(`k. dragging a saved box in a ${width} px panel does not move the view`, grab.onBox && sameView(before, after), `pressed on box ${grab.onBox} · before ${JSON.stringify(before)} · after ${JSON.stringify(after)} · calls ${calls.join(",")}`);
+    check(`k. the saved-box drag in a ${width} px panel has no console errors`, problems.length === 0, problems.join(" | ").slice(0, 300));
+  } finally {
+    await context.close();
+    server.close();
+  }
+}
+
+// Undo of a box drawn in a 600 px panel. It must not re-center the view, and it must ask the plugin once.
+async function undoDraw(browser) {
+  const { server, context, page, problems } = await openPage(browser, "light");
+  try {
+    await page.setViewportSize({ width: 600, height: 760 });
+    await page.waitForSelector(".cv-empty-line");
+    await page.waitForTimeout(300);
+    await page.mouse.click(300, 300);
+    await page.keyboard.press("r");
+    await page.waitForTimeout(300);
+    await drag(page, { x: 150, y: 220 }, { x: 260, y: 300 });
+    await waitCount(page, 1);
+    const before = await view(page);
+    await page.evaluate(() => window.kaganStub.clearCalls());
+    await page.locator("[aria-label='Undo']").click();
+    await page.waitForFunction(() => document.querySelectorAll("svg.cv-svg [data-id]").length === 0, null, { timeout: 4000 });
+    await page.waitForTimeout(300);
+    const after = await view(page);
+    const calls = await page.evaluate(() => window.kaganStub.calls());
+    check("k. undoing a box in a 600 px panel does not move the view", sameView(before, after), `before ${JSON.stringify(before)} · after ${JSON.stringify(after)} · calls ${calls.join(",")}`);
+    check("k. undo asks the plugin once and does not refetch", calls.join(",") === "undo", calls.join(","));
+    check("k. undo in a 600 px panel has no console errors", problems.length === 0, problems.join(" | ").slice(0, 300));
+  } finally {
+    await context.close();
+    server.close();
+  }
+}
+
 async function screenshots(browser, theme) {
   fs.mkdirSync(shotDir, { recursive: true });
   const { server, context, page, problems } = await openPage(browser, theme);
@@ -446,6 +506,9 @@ try {
   await sizing(browser);
   await narrowDraw(browser);
   await narrowDraw(browser, { coarse: true });
+  await savedDrag(browser, 600);
+  await savedDrag(browser, 1100);
+  await undoDraw(browser);
   await bridge(browser);
   await screenshots(browser, "light");
   await screenshots(browser, "dark");
