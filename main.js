@@ -21010,6 +21010,10 @@ async function call(request) {
     }
     case "list":
       return { names: await listNames() };
+    case "context": {
+      const current = context();
+      return { threadId: current.threadId ?? null, projectId: current.projectId ?? null };
+    }
     case "apply": {
       const ops = external_exports.array(opSchema).min(1).max(OPS_MAX).parse(request.ops);
       const result = await edit(normalizeName(request.name), ops);
