@@ -370,6 +370,12 @@ function Canvas() {
     if (userMoved.current) return;
     setView(fitView(contentBounds(docRef.current), size.w, size.h));
   }, [doc?.name, measured, size.h, size.w]);
+  // Once the canvas is fitted, a grab, a selection, or a tool change freezes the fit. Selecting a box grows the
+  // bottom bar, and that must not re-center the drawing under the person's hand.
+  const freezeFit = () => {
+    if (docRef.current !== null && fittedRef.current === docRef.current.name) userMoved.current = true;
+  };
+  useLayoutEffect(freezeFit, [tool, selectedIds, editing, menuOpen, paletteOpen]);
 
   /** Shows a plugin call's doc only when no other call for the canvas is still out, then
    * fetches again if a push or a failure says the page may be behind. */
@@ -549,6 +555,7 @@ function Canvas() {
 
   const onDown = (event: ReactPointerEvent<SVGSVGElement>) => {
     if (doc === null) return;
+    freezeFit();
     setMenuOpen(false);
     setPaletteOpen(false);
     rootRef.current?.focus({ preventScroll: true });
