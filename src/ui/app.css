@@ -1,0 +1,558 @@
+@import "tailwindcss";
+
+/* Kagan's theme tokens, written by the host into /__kagan/theme.css. Only these colors appear here,
+   besides the eight stroke colors that come from COLORS and stay fixed, as in bb. */
+@font-face {
+  font-family: "Nunito";
+  src: url("fonts/nunito.woff2") format("woff2");
+  font-weight: 500;
+  font-display: swap;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: "Nunito", ui-sans-serif, system-ui, sans-serif;
+  font-size: 14px;
+  overflow: hidden;
+}
+
+.cv-root {
+  position: relative;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  outline: none;
+  background: var(--bg);
+  color: var(--ink);
+}
+/* Zero specificity, so a button's own color still wins. */
+:where(.cv-root) :is(button, select, input) {
+  font: inherit;
+  color: inherit;
+}
+.cv-root :focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.cv-frame {
+  position: absolute;
+  left: 0;
+  right: 0;
+}
+.cv-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+  user-select: none;
+  background: var(--bg);
+}
+.cv-svg text {
+  font-weight: 500;
+}
+
+/* Islands: bb's floating panels, drawn with the surface token and no purple shadow. */
+.cv-island {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.cv-top {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  top: 12px;
+  z-index: 20;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px;
+  pointer-events: none;
+}
+.cv-top-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+.cv-top-row.cv-center {
+  justify-content: center;
+}
+.cv-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  max-width: 100%;
+  pointer-events: auto;
+}
+.cv-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* Controls: one 36px size for tools, menu and zoom, as in bb. */
+.cv-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  flex: none;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  pointer-events: auto;
+}
+.cv-btn:hover {
+  background: var(--hover);
+}
+.cv-btn[aria-pressed="true"] {
+  background: var(--raised);
+  color: var(--ink);
+}
+.cv-btn svg {
+  width: 16px;
+  height: 16px;
+}
+.cv-fill {
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+.cv-fill:hover {
+  background: var(--hover);
+}
+.cv-key {
+  position: absolute;
+  right: 3px;
+  bottom: 1px;
+  font-size: 10px;
+  line-height: 1;
+  color: var(--muted);
+}
+.cv-btn[aria-pressed="true"] .cv-key {
+  color: var(--ink);
+}
+.cv-divider {
+  width: 1px;
+  height: 24px;
+  margin: 0 4px;
+  background: var(--line);
+  flex: none;
+}
+
+.cv-hint {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  z-index: 10;
+  pointer-events: none;
+  text-align: center;
+  font-size: 12px;
+  color: var(--muted);
+}
+.cv-empty {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 0 24px;
+  text-align: center;
+  pointer-events: none;
+  color: var(--muted);
+}
+.cv-empty-title {
+  font-size: 24px;
+}
+.cv-empty-line {
+  font-size: 16px;
+}
+
+.cv-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+}
+.cv-menu {
+  position: absolute;
+  left: 12px;
+  top: 60px;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  width: 240px;
+  max-height: calc(100% - 132px);
+  overflow-y: auto;
+  padding: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+}
+.cv-menu-label {
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.cv-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 32px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  text-align: left;
+}
+.cv-menu-item:hover:not(:disabled) {
+  background: var(--hover);
+}
+.cv-menu-item:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+.cv-menu-item[aria-current="true"] {
+  font-weight: 600;
+}
+.cv-check {
+  display: flex;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  align-items: center;
+  justify-content: center;
+}
+.cv-check svg {
+  width: 16px;
+  height: 16px;
+}
+.cv-truncate {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cv-menu-sep {
+  height: 1px;
+  margin: 6px 4px;
+  background: var(--line);
+}
+.cv-shortcut {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--muted);
+}
+.cv-new {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 4px;
+}
+.cv-field {
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--ink);
+  outline: 0;
+}
+.cv-field::placeholder {
+  color: var(--muted);
+}
+.cv-field:focus-visible {
+  outline: 2px solid var(--accent);
+}
+
+.cv-dock {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 45%;
+  overflow-y: auto;
+  pointer-events: none;
+}
+.cv-panel {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 12px;
+  pointer-events: auto;
+}
+.cv-panel h3 {
+  margin: 0 0 4px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+}
+.cv-panel section {
+  display: flex;
+  flex-direction: column;
+}
+.cv-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.cv-row .cv-btn,
+.cv-row .cv-swatch {
+  width: 32px;
+  height: 32px;
+}
+.cv-swatch {
+  width: 22px;
+  height: 22px;
+  flex: none;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  cursor: pointer;
+  pointer-events: auto;
+}
+.cv-swatch[aria-pressed="true"] {
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 3px var(--ink);
+}
+.cv-swatch-current {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+}
+.cv-palette {
+  display: grid;
+  grid-template-columns: repeat(4, 22px);
+  gap: 8px;
+  margin-top: 8px;
+  padding: 8px;
+  border-radius: 6px;
+  background: var(--bg);
+}
+.cv-pill {
+  align-self: center;
+  height: 32px;
+  padding: 0 14px;
+  color: var(--ink);
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.cv-bottom {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+  pointer-events: none;
+}
+.cv-group {
+  display: inline-flex;
+  align-items: center;
+  height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  pointer-events: auto;
+}
+.cv-group .cv-btn {
+  background: transparent;
+}
+.cv-zoom {
+  min-width: 60px;
+  height: 36px;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 14px;
+  pointer-events: auto;
+}
+.cv-send {
+  display: flex;
+  flex: 1 1 360px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px;
+  pointer-events: auto;
+}
+.cv-select {
+  flex: 1 1 100%;
+  min-width: 0;
+  height: 32px;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--ink);
+  font-size: 13px;
+}
+.cv-note {
+  flex: 1 1 150px;
+}
+.cv-primary {
+  height: 32px;
+  padding: 0 14px;
+  flex: none;
+  border: 0;
+  border-radius: 6px;
+  background: var(--ink);
+  color: var(--bg);
+  font-weight: 600;
+  cursor: pointer;
+}
+.cv-primary:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.cv-caption {
+  flex: 1 1 100%;
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+.cv-caption code {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 11px;
+}
+
+.cv-modal {
+  position: absolute;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.35);
+}
+.cv-dialog {
+  width: min(360px, calc(100% - 32px));
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.cv-dialog h2 {
+  margin: 0 0 8px;
+  font-size: 15px;
+  font-weight: 600;
+}
+.cv-dialog p {
+  margin: 0 0 16px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.cv-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.cv-outline,
+.cv-danger {
+  height: 32px;
+  padding: 0 14px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.cv-outline {
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink);
+}
+.cv-danger {
+  border: 0;
+  background: var(--failed);
+  color: var(--bg);
+  font-weight: 600;
+}
+
+/* Toasts: no injected style tags, so this is plain CSS in the page file. */
+.cv-toasts {
+  position: fixed;
+  right: 12px;
+  bottom: 12px;
+  z-index: 80;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+}
+.cv-toast {
+  display: flex;
+  flex-direction: column;
+  max-width: 320px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  font-size: 13px;
+}
+.cv-toast-error {
+  border-color: var(--failed);
+}
+.cv-muted {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.cv-editor {
+  position: absolute;
+  z-index: 10;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  resize: none;
+  overflow: hidden;
+  background: transparent;
+  white-space: pre;
+  font-family: "Nunito", ui-sans-serif, system-ui;
+  font-weight: 500;
+}
+
+.cv-narrow .cv-key,
+.cv-narrow .cv-shortcut {
+  display: none;
+}
+.cv-narrow .cv-btn {
+  width: 44px;
+  height: 44px;
+}
+.cv-narrow .cv-zoom,
+.cv-narrow .cv-group {
+  height: 44px;
+}
+.cv-narrow .cv-select,
+.cv-narrow .cv-field,
+.cv-narrow .cv-primary {
+  height: 40px;
+  font-size: 16px;
+}

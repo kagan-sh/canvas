@@ -1,44 +1,21 @@
 {
   "id": "dev.kagan.canvas",
   "name": "Canvas",
-  "version": "0.1.6",
+  "version": "1.0.0",
   "kagan": ">=0.1.0",
   "entry": "main.js",
   "icon": "icon.svg",
-  "instructions": "A shared drawing page. Diagrams live in this plugin's local database. Agents use canvas_read / canvas_edit or kg canvas show. Send pastes a short pointer into a chosen thread in the current project without submitting it (host.pasteIntoThread, or kg thread paste). The thread list uses the threads area. Clipboard read is for paste of copied shapes. Copy as image stays off: the clipboard call only accepts text.",
+  "instructions": "A shared drawing canvas beside a thread. The person draws boxes, arrows, text and freehand strokes; agents draw too. Agents read a canvas with canvas_read or kg canvas show <name>, and change it with canvas_edit. Send pastes a short note with that command into a thread without pressing Enter. The canvas skill says how to draw a readable diagram.",
   "powers": {
-    "clipboard": {
-      "read": true,
-      "write": true
-    },
-    "areas": [
-      "database",
-      "process",
-      "threads"
-    ],
-    "run": [
-      {
-        "program": "kg"
-      }
-    ]
+    "areas": ["database", "threads"],
+    "clipboard": { "read": false, "write": true }
   },
   "commands": [
-    {
-      "id": "open",
-      "title": "Show Canvas",
-      "key": "secondary-shift-d",
-      "when": "thread"
-    }
+    { "id": "open", "title": "Canvas", "key": "secondary-shift-d", "when": "thread", "header": true }
   ],
   "ui": {
     "panels": [
-      {
-        "id": "canvas",
-        "title": "Canvas",
-        "view": "CanvasPanel",
-        "placement": "right",
-        "follows": "thread"
-      }
+      { "id": "canvas", "title": "Canvas", "web": "ui/index.html", "placement": "right", "follows": "thread" }
     ]
   },
   "tools": [
@@ -50,7 +27,7 @@
     },
     {
       "name": "canvas_edit",
-      "description": "Draw on a shared canvas by applying a list of ops. Returns new ids and the lines that changed. The canvas must already exist.",
+      "description": "Draw on a shared canvas by applying a list of ops. Returns new ids and the lines that changed.",
       "input": "schemas/canvas_edit.json",
       "scope": "all"
     }
@@ -59,18 +36,10 @@
     {
       "name": "canvas",
       "commands": [
-        {
-          "name": "list",
-          "usage": "list"
-        },
-        {
-          "name": "show",
-          "usage": "show <name>"
-        }
+        { "name": "list", "usage": "list" },
+        { "name": "show", "usage": "show <name>" }
       ]
     }
   ],
-  "skills": [
-    "skills/canvas"
-  ]
+  "skills": ["skills/canvas"]
 }
