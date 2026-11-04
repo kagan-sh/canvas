@@ -263,7 +263,7 @@ function Canvas() {
   );
   const open = useCallback(
     (name?: string) => {
-      // A new empty array would look like a selection change to the effects that watch selectedIds.
+      // A fresh array would read as a selection change to the effects watching selectedIds.
       setSelectedIds((ids) => (ids.length === 0 ? ids : []));
       setEditing(null);
       refetch(name);
@@ -370,8 +370,7 @@ function Canvas() {
     if (userMoved.current) return;
     setView(fitView(contentBounds(docRef.current), size.w, size.h));
   }, [doc?.name, measured, size.h, size.w]);
-  // Once the canvas is fitted, a grab, a selection, or a tool change freezes the fit. Selecting a box grows the
-  // bottom bar, and that must not re-center the drawing under the person's hand.
+  // Selecting a box grows the bottom bar, which must not re-center a fitted drawing under the person's hand.
   const freezeFit = () => {
     if (docRef.current !== null && fittedRef.current === docRef.current.name) userMoved.current = true;
   };
@@ -415,7 +414,7 @@ function Canvas() {
         const local = applyOps(current, ops).doc;
         epochRef.current++;
         show(local);
-        // The person's own edit keeps their framing, even when the panel's chrome then changes height.
+        // The chrome changes height after an edit, so keep the framing the person already had.
         userMoved.current = true;
       } catch (cause) {
         fail(cause);

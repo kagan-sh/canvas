@@ -78,7 +78,7 @@ function handle(request: Request) {
         const current = docFor(name);
         from.set(name, stack);
         to.set(name, [...(to.get(name) ?? []), current]);
-        // An undo or redo is a new revision, as the store makes it. Announce it before the call answers, as main.ts does.
+        // Undo and redo bump the revision as the store does, and main.ts announces the change before the call answers.
         const next = { ...previous, rev: current.rev + 1 };
         write(name, next);
         dispatch({ push: "changed", name, rev: next.rev });
