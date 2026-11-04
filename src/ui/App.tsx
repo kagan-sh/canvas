@@ -263,7 +263,8 @@ function Canvas() {
   );
   const open = useCallback(
     (name?: string) => {
-      setSelectedIds([]);
+      // Keep the same array when nothing is selected, so a reopen does not look like a selection change.
+      setSelectedIds((ids) => (ids.length === 0 ? ids : []));
       setEditing(null);
       refetch(name);
     },
