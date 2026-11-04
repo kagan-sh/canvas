@@ -385,7 +385,7 @@ async function narrowDraw(browser, { coarse = false } = {}) {
     await page.keyboard.press("r");
     await page.waitForTimeout(300);
     const before = await view(page);
-    await page.screenshot({ path: path.join(shotDir, "narrow-600-before-draw.png") });
+    await page.screenshot({ path: path.join(shotDir, `narrow-600-before-draw${coarse ? "-touch" : ""}.png`) });
     await page.evaluate(() => {
       window.kaganStub.clearCalls();
       window.__viewLog = [];
@@ -397,7 +397,7 @@ async function narrowDraw(browser, { coarse = false } = {}) {
     const after = await view(page);
     const calls = await page.evaluate(() => window.kaganStub.calls());
     const moves = await page.evaluate(() => window.__viewLog);
-    await page.screenshot({ path: path.join(shotDir, "narrow-600-after-draw.png") });
+    await page.screenshot({ path: path.join(shotDir, `narrow-600-after-draw${coarse ? "-touch" : ""}.png`) });
     const detail = `before ${JSON.stringify(before)} · after ${JSON.stringify(after)} · view changes ${moves.length} · calls ${calls.join(",")}`;
     check(`k. drawing a box in a ${where} does not move or re-center the view`, sameView(before, after), detail);
     check("k. the page does not refetch its own box", !calls.includes("open") && !calls.includes("list"), calls.join(","));
