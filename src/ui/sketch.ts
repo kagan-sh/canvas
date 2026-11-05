@@ -26,7 +26,8 @@ function roughnessFor(w: number, h: number, linear: boolean): number {
 }
 
 function options(seed: number, stroke: string, roughness: number): Options {
-  return { seed, roughness, stroke, strokeWidth: STROKE_WIDTH, preserveVertices: true, fillWeight: STROKE_WIDTH / 2 };
+  // Excalidraw draws one sketchy pass, not rough.js's doubled outline, so a box reads as a single elegant stroke.
+  return { seed, roughness, stroke, strokeWidth: STROKE_WIDTH, preserveVertices: true, fillWeight: STROKE_WIDTH / 2, disableMultiStroke: true };
 }
 
 function strokes(drawable: ReturnType<typeof generator.path>): SketchPath[] {

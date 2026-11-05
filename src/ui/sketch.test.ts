@@ -9,12 +9,13 @@ test("a seed is stable per id and differs between ids", () => {
   assert.notEqual(seedOf(""), 0);
 });
 
-test("a box is drawn as stroked paths in the requested color", () => {
+test("a box is one clean sketched pass in the requested color", () => {
   const paths = sketchBox(200, 80, seedOf("b1"), "#e03131");
   assert.ok(paths.length > 0);
   for (const path of paths) {
     assert.match(path.d ?? "", /^M/);
     assert.equal(path.stroke, "#e03131");
+    assert.equal(path.strokeWidth, 2);
   }
 });
 
