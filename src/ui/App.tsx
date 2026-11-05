@@ -1095,7 +1095,7 @@ function Canvas() {
         </>
       ) : null}
 
-      <div ref={dockRef} className="cv-dock">
+      <div className="cv-style" style={{ top: docks.top }}>
         {showPanel && !menuOpen ? (
           <div className="cv-island cv-panel" aria-label="Drawing style">
             <section>
@@ -1179,7 +1179,9 @@ function Canvas() {
             ) : null}
           </div>
         ) : null}
+      </div>
 
+      <div ref={dockRef} className="cv-dock">
         {lost ? (
           <button type="button" className="cv-island cv-pill" onClick={fit}>
             Scroll back to content

@@ -553,6 +553,10 @@ async function screenshots(browser, theme) {
     await page.screenshot({ path: path.join(shotDir, `empty-${theme}.png`) });
     await drawDiagram(page);
     await page.screenshot({ path: path.join(shotDir, `diagram-${theme}.png`) });
+    // A selected box shows the drawing style under the menu: the layout this check was made for.
+    await page.locator("svg.cv-svg [data-id]").first().click();
+    await frames(page);
+    await page.screenshot({ path: path.join(shotDir, `selected-${theme}.png`) });
     await page.locator(".cv-send").screenshot({ path: path.join(shotDir, `send-${theme}.png`) });
     await page.locator("[aria-label='Main menu']").click();
     await page.screenshot({ path: path.join(shotDir, `menu-${theme}.png`) });
